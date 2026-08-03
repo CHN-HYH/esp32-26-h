@@ -35,6 +35,11 @@
 
 ## 低延迟图传与后续钢珠识别
 
+- 2026-08-03 当前源码实态为 `PIXFORMAT_YUV422 + FRAMESIZE_QVGA (320x240)`、双摄像头帧缓冲、`CAMERA_GRAB_LATEST`、摄像头输入队列长度 1 且满时丢弃旧帧；以实际源码为准，下面“用户已回退”条目为早期历史记录。
+- 2026-08-03 用户已回退桌面黑圆的纯亮度阈值与图传叠加标记实现，改为在 `main/src/yahboom_camera.c` 验证背景差分。GPIO0 是 ESP32-S3 启动绑带脚，按住会导致 ROM 输出 `boot:0x20 (DOWNLOAD(USB/UART0))` 并进入下载模式，因此已取消全部 GPIO0 按键逻辑。程序上电后自动丢弃 20 帧等待摄像头稳定，再平均 8 帧空场景并保存 QVGA 的 Y 背景图（约 75 KB PSRAM）；出现 `BACKGROUND_READY` 后自动开始识别。之后每三帧计算 `abs(Y_now - Y_bg) > 35`，并以面积、外接框比例、填充率筛选圆形候选；日志先输出一次 `DIFF_CIRCLE_FOUND`，持续输出 `DIFF_CIRCLE x=<x> y=<y> w=<w> h=<h> area=<area> fill=<fill>%`，连续 3 个检测周期丢失目标后输出一次 `DIFF_CIRCLE_LOST`。这些均通过 ESP_LOG 系统控制台输出，供 UART0 调试；尚未由用户编译、烧录和实机验证。
+- 2026-08-03 排查到当前 `sdkconfig` 曾设置 `CONFIG_ESP_CONSOLE_NONE=y`，所以 Type-C/UART0 只能看到 ROM 启动日志、看不到应用 `ESP_LOGI`；已将 `sdkconfig` 与两个 `sdkconfig.defaults` 统一改为 `CONFIG_ESP_CONSOLE_UART_DEFAULT=y`、UART0、115200。`CONFIG_LOG_DEFAULT_LEVEL_INFO=y` 原本已开启。背景采集增加非阻塞 `5000 ms` 起始延迟：图传在此期间正常工作，超时后再执行 20 帧稳定和 8 帧空场景平均，方便先连接热点并打开 `192.168.4.1` 观察画面。
+- 2026-08-03 差分圆形候选通过筛选后，`main/src/yahboom_camera.c` 直接在同一 YUV422 原始帧叠加白色外接方框和红色中心十字，然后再进入图传队列。识别和坐标计算在绘制前完成；未识别到目标时不绘制标记。
+- 2026-08-03 用户实机日志已确认应用控制台输出和背景差分圆形筛选正常运行：`DIFF_CIRCLE` 约每 230 ms 输出一次，目标移动时坐标连续变化，外接框约 `64~84 px` 且接近正方形，填充率约 `68~81%`，符合圆形候选筛选条件；出现 `DIFF_CIRCLE_LOST` 后再次出现 `DIFF_CIRCLE_FOUND` 也验证了进入/退出状态机。仍应以网页白框和红十字是否跟随实际黑圆来排除环境中的误检。
 - 2026-08-03 用户已回退本节此前的低延迟源码修改。当前本地源码恢复为队列长度 2、双摄像头帧缓冲、`CAMERA_GRAB_WHEN_EMPTY`、阻塞队列投递、QVGA RGB565 质量 80 软件 JPEG；下面的第一、第二阶段数据仅作为历史实验结果，不代表当前源码状态。
 - 2026-08-03 针对图传延迟完成第一阶段优化：摄像头输入队列和预留的识别后图传队列长度均改为 1，摄像头任务采用非阻塞投递，队列满时归还旧帧并只保留最新帧。
 - 摄像头保持 `PIXFORMAT_RGB565 + FRAMESIZE_QVGA (320x240)`，避免影响后续钢珠识别；帧缓冲从 2 个增加为 3 个，并改用 `CAMERA_GRAB_LATEST`。

@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "wifi_data.h": "c",
+        "yahboom_camera.h": "c"
+    }
+}

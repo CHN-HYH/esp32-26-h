@@ -1,0 +1,9 @@
+Compiler supported targets: xtensa-esp32s3-elf
+
+CMake Warning at C:/Espressif/frameworks/esp-idf-v5.1.2/tools/cmake/component.cmake:293 (message):
+  No source files found for SRC_DIRS entry 'web'.
+Call Stack (most recent call first):
+  C:/Espressif/frameworks/esp-idf-v5.1.2/tools/cmake/component.cmake:443 (__component_add_sources)
+  C:/Espressif/frameworks/esp-idf-v5.1.2/video-wifi/components/modules/CMakeLists.txt:32 (idf_component_register)
+
+

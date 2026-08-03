@@ -18,6 +18,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_jpeg_enc.h"
+#include "lwip/sockets.h"
 #include "img_converters.h"
 #include "fb_gfx.h"
 #include "app_mymdns.h"
@@ -210,6 +211,13 @@ static esp_err_t stream_handler(httpd_req_t *req)
     char part_buf[128];
     stream_jpeg_encoder_t encoder = {};
     bool fast_encoder_ready = stream_jpeg_encoder_init(&encoder);
+    const int tcp_nodelay = 1;
+
+    if (setsockopt(httpd_req_to_sockfd(req), IPPROTO_TCP, TCP_NODELAY,
+                   &tcp_nodelay, sizeof(tcp_nodelay)) < 0)
+    {
+        ESP_LOGW(TAG, "Failed to enable TCP_NODELAY for stream");
+    }
 
     res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
     if (res != ESP_OK)
@@ -246,6 +254,13 @@ static esp_err_t stream_handler(httpd_req_t *req)
             {
                 jpg_buf_allocated = true;
             }
+
+            // YUV/RGB 帧已编码到独立 JPEG 缓冲，可在网络发送前归还摄像头帧。
+            if (res == ESP_OK && xQueueFrameO == NULL && gReturnFB && frame->format != PIXFORMAT_JPEG)
+            {
+                esp_camera_fb_return(frame);
+                frame = NULL;
+            }
         }
         else
         {
@@ -276,17 +291,20 @@ static esp_err_t stream_handler(httpd_req_t *req)
         _jpg_buf = NULL;
         _jpg_buf_len = 0;
 
-        if (xQueueFrameO)
+        if (frame)
         {
-            xQueueSend(xQueueFrameO, &frame, portMAX_DELAY);
-        }
-        else if (gReturnFB)
-        {
-            esp_camera_fb_return(frame);
-        }
-        else
-        {
-            free(frame);
+            if (xQueueFrameO)
+            {
+                xQueueSend(xQueueFrameO, &frame, portMAX_DELAY);
+            }
+            else if (gReturnFB)
+            {
+                esp_camera_fb_return(frame);
+            }
+            else
+            {
+                free(frame);
+            }
         }
 
         if (res != ESP_OK)

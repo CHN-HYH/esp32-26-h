@@ -90,6 +90,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             break;
 
         case WIFI_EVENT_STA_DISCONNECTED:
+            if (s_wifi_event_group) {
+                xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+            }
             if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY)
             {
                 esp_wifi_connect();
@@ -97,7 +100,11 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                 ESP_LOGI(TAG, "retry to connect to the AP");
             }
             else {
-                xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+                if (s_wifi_event_group) {
+                    xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+                }
+                s_retry_num = 0;
+                esp_wifi_connect();
             }
             ESP_LOGI(TAG, "connect to the AP fail");
             break;
@@ -125,7 +132,10 @@ static void ip_event_handler(void* arg, esp_event_base_t event_base,
             sta_ip_connect[3] = esp_ip4_addr_get_byte(&event->ip_info.ip, 3);
 
             s_retry_num = 0;
-            xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+            if (s_wifi_event_group) {
+                xEventGroupClearBits(s_wifi_event_group, WIFI_FAIL_BIT);
+                xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+            }
             break;
         default:
             break;
@@ -147,18 +157,14 @@ void wifi_init_softap(esp_netif_t * netif)
         ESP_ERROR_CHECK(esp_netif_set_ip_info(netif, &ip_info));
         ESP_ERROR_CHECK(esp_netif_dhcps_start(netif));
     }
-    wifi_config_t wifi_config = {
-        // .ap.ssid = EXAMPLE_ESP_WIFI_AP_SSID,
-        // .ap.password = EXAMPLE_ESP_WIFI_AP_PASS,
-        .ap.ssid_len = strlen((char *)wifi_config.ap.ssid),
-        .ap.channel = 1,
-        .ap.authmode = WIFI_AUTH_WPA2_PSK,
-        // .ap.max_connection = EXAMPLE_MAX_STA_CONN,
-        .ap.max_connection = 4,
-        .ap.beacon_interval = 100,
-    };
-    sprintf((char *)wifi_config.sta.ssid,"%s",(char *)AP_wifi_SSID);
-    sprintf((char *)wifi_config.sta.password,"%s",(char *)AP_wifi_PASSWD);
+    wifi_config_t wifi_config = {0};
+    snprintf((char *)wifi_config.ap.ssid, sizeof(wifi_config.ap.ssid), "%s", AP_wifi_SSID);
+    snprintf((char *)wifi_config.ap.password, sizeof(wifi_config.ap.password), "%s", AP_wifi_PASSWD);
+    wifi_config.ap.ssid_len = strlen((char *)wifi_config.ap.ssid);
+    wifi_config.ap.channel = 1;
+    wifi_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_config.ap.max_connection = 4;
+    wifi_config.ap.beacon_interval = 100;
 
     if (strlen(AP_wifi_PASSWD) == 0)
     {
@@ -202,9 +208,23 @@ void app_mywifi_main()
     ESP_ERROR_CHECK(ret);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    wifi_mode_t mode = WIFI_MODE_STA;
-
-    mode = WIFI_MODE_APSTA;
+    wifi_mode_t mode;
+    switch (wifi_Mode) {
+        case 0:
+            mode = WIFI_MODE_AP;
+            break;
+        case 1:
+            mode = WIFI_MODE_STA;
+            break;
+        case 2:
+            mode = WIFI_MODE_APSTA;
+            break;
+        default:
+            ESP_LOGW(TAG, "Invalid wifi mode %u, using AP+STA", wifi_Mode);
+            wifi_Mode = 2;
+            mode = WIFI_MODE_APSTA;
+            break;
+    }
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -237,6 +257,4 @@ void app_mywifi_main()
             pdFALSE,
             portMAX_DELAY);
     }
-    vEventGroupDelete(s_wifi_event_group);
-    s_wifi_event_group = NULL;
 }

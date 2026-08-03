@@ -17,7 +17,7 @@ static void task_process_handler(void *arg)
         if (xQueueSend(xQueueFrameO, &frame, 0) == pdTRUE)
             continue;
 
-        // 队列只保留最新帧，避免网络变慢后持续播放历史画面。
+        // 队列只保留最新帧，旧帧必须先归还摄像头驱动。
         camera_fb_t *stale_frame = NULL;
         if (xQueueReceive(xQueueFrameO, &stale_frame, 0) == pdTRUE)
             esp_camera_fb_return(stale_frame);

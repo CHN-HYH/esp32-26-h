@@ -83,13 +83,13 @@ const char * app_mymdns_query(size_t * out_len)
     *p++ = '[';
 
     //add own data first
-    esp_netif_ip_info_t ip;
-    if (strlen(CONFIG_ESP_WIFI_SSID)) {
-    	// tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip);
-        esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &ip);
-    } else {
-    	// tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ip);
-        esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_AP_DEF"), &ip);
+    esp_netif_ip_info_t ip = {0};
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!netif || esp_netif_get_ip_info(netif, &ip) != ESP_OK || ip.ip.addr == 0) {
+        netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+        if (netif) {
+            esp_netif_get_ip_info(netif, &ip);
+        }
     }
     *p++ = '{';
     p += sprintf(p, "\"instance\":\"%s\",", iname);

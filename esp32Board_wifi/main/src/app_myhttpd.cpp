@@ -15,9 +15,9 @@
 #include "app_myhttpd.hpp"
 
 #include <list>
-#include "esp_http_server.h"
 #include "esp_heap_caps.h"
-#include "esp_timer.h"
+#include "esp_http_server.h"
+#include "esp_jpeg_enc.h"
 #include "img_converters.h"
 #include "fb_gfx.h"
 #include "app_mymdns.h"
@@ -49,18 +49,89 @@ typedef struct
 
 #define PART_BOUNDARY "123456789000000000000987654321"
 #define STREAM_JPEG_QUALITY 60
-#define STREAM_SOURCE_WIDTH 320
-#define STREAM_SOURCE_HEIGHT 240
-#define STREAM_PREVIEW_WIDTH (STREAM_SOURCE_WIDTH / 2)
-#define STREAM_PREVIEW_HEIGHT (STREAM_SOURCE_HEIGHT / 2)
-#define STREAM_PREVIEW_BUFFER_SIZE (STREAM_PREVIEW_WIDTH * STREAM_PREVIEW_HEIGHT * 2)
+#define STREAM_JPEG_BUFFER_SIZE (128 * 1024)
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
 static const char *_STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
-static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\nX-Timestamp: %lld.%06lld\r\nX-Frame-Age: %lld\r\n\r\n";
+static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\nX-Timestamp: %lld.%06lld\r\n\r\n";
 
 httpd_handle_t stream_httpd = NULL;
 httpd_handle_t camera_httpd = NULL;
 httpd_handle_t webserver = NULL;
+
+typedef struct
+{
+    jpeg_enc_handle_t handle;
+    uint8_t *output;
+} stream_jpeg_encoder_t;
+
+static bool stream_jpeg_encoder_init(stream_jpeg_encoder_t *encoder)
+{
+    jpeg_enc_config_t config = DEFAULT_JPEG_ENC_CONFIG();
+    config.width = 320;
+    config.height = 240;
+    config.src_type = JPEG_PIXEL_FORMAT_YCbYCr;
+    config.subsampling = JPEG_SUBSAMPLE_420;
+    config.quality = STREAM_JPEG_QUALITY;
+    config.rotate = JPEG_ROTATE_0D;
+    config.task_enable = false;
+
+    encoder->handle = NULL;
+    encoder->output = static_cast<uint8_t *>(
+        heap_caps_malloc(STREAM_JPEG_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!encoder->output)
+    {
+        ESP_LOGE(TAG, "Fast JPEG output buffer allocation failed");
+        return false;
+    }
+
+    jpeg_error_t ret = jpeg_enc_open(&config, &encoder->handle);
+    if (ret != JPEG_ERR_OK)
+    {
+        ESP_LOGE(TAG, "Fast JPEG encoder initialization failed: %d", ret);
+        free(encoder->output);
+        encoder->output = NULL;
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Fast JPEG encoder ready: 320x240 YUV422, quality %d", STREAM_JPEG_QUALITY);
+    return true;
+}
+
+static void stream_jpeg_encoder_deinit(stream_jpeg_encoder_t *encoder)
+{
+    if (encoder->handle)
+    {
+        jpeg_enc_close(encoder->handle);
+        encoder->handle = NULL;
+    }
+    free(encoder->output);
+    encoder->output = NULL;
+}
+
+static bool stream_jpeg_encode(stream_jpeg_encoder_t *encoder, const camera_fb_t *frame,
+                               uint8_t **jpg_buf, size_t *jpg_len)
+{
+    if (!encoder->handle || !encoder->output || frame->format != PIXFORMAT_YUV422 ||
+        frame->width != 320 || frame->height != 240 ||
+        (reinterpret_cast<uintptr_t>(frame->buf) & 0x0f) != 0)
+    {
+        return false;
+    }
+
+    int encoded_size = 0;
+    jpeg_error_t ret = jpeg_enc_process(encoder->handle, frame->buf, frame->len,
+                                        encoder->output, STREAM_JPEG_BUFFER_SIZE,
+                                        &encoded_size);
+    if (ret != JPEG_ERR_OK || encoded_size <= 0)
+    {
+        ESP_LOGE(TAG, "Fast JPEG compression failed: %d", ret);
+        return false;
+    }
+
+    *jpg_buf = encoder->output;
+    *jpg_len = static_cast<size_t>(encoded_size);
+    return true;
+}
 
 static size_t jpg_encode_stream(void *arg, size_t index, const void *data, size_t len)
 {
@@ -75,31 +146,6 @@ static size_t jpg_encode_stream(void *arg, size_t index, const void *data, size_
     }
     j->len += len;
     return len;
-}
-
-static bool downsample_rgb565_2x(const camera_fb_t *frame, uint8_t *preview_buf)
-{
-    if (!frame || !preview_buf || frame->format != PIXFORMAT_RGB565 ||
-        frame->width != STREAM_SOURCE_WIDTH || frame->height != STREAM_SOURCE_HEIGHT)
-    {
-        return false;
-    }
-
-    const uint16_t *src = reinterpret_cast<const uint16_t *>(frame->buf);
-    uint16_t *dst = reinterpret_cast<uint16_t *>(preview_buf);
-
-    // 识别保留完整 QVGA 原图，只有网页预览隔行隔列缩小为 160x120。
-    for (size_t y = 0; y < STREAM_PREVIEW_HEIGHT; ++y)
-    {
-        const uint16_t *src_row = src + (y * 2 * STREAM_SOURCE_WIDTH);
-        uint16_t *dst_row = dst + (y * STREAM_PREVIEW_WIDTH);
-        for (size_t x = 0; x < STREAM_PREVIEW_WIDTH; ++x)
-        {
-            dst_row[x] = src_row[x * 2];
-        }
-    }
-
-    return true;
 }
 
 static esp_err_t capture_handler(httpd_req_t *req)
@@ -161,35 +207,23 @@ static esp_err_t stream_handler(httpd_req_t *req)
     esp_err_t res = ESP_OK;
     size_t _jpg_buf_len = 0;
     uint8_t *_jpg_buf = NULL;
-    char part_buf[192];
-    uint8_t *preview_buf = static_cast<uint8_t *>(
-        heap_caps_malloc(STREAM_PREVIEW_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-
-    if (preview_buf)
-    {
-        ESP_LOGI(TAG, "Stream source %dx%d RGB565, preview %dx%d",
-                 STREAM_SOURCE_WIDTH, STREAM_SOURCE_HEIGHT,
-                 STREAM_PREVIEW_WIDTH, STREAM_PREVIEW_HEIGHT);
-    }
-    else
-    {
-        ESP_LOGW(TAG, "Preview buffer allocation failed, using source frame for JPEG");
-    }
+    char part_buf[128];
+    stream_jpeg_encoder_t encoder = {};
+    bool fast_encoder_ready = stream_jpeg_encoder_init(&encoder);
 
     res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
     if (res != ESP_OK)
     {
-        free(preview_buf);
+        stream_jpeg_encoder_deinit(&encoder);
         return res;
     }
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-    httpd_resp_set_hdr(req, "Pragma", "no-cache");
-    httpd_resp_set_hdr(req, "X-Framerate", "20");
 
     while (true)
     {
+        bool jpg_buf_allocated = false;
+
         if (xQueueReceive(xQueueFrameI, &frame, portMAX_DELAY))
         {
             _timestamp.tv_sec = frame->timestamp.tv_sec;
@@ -200,21 +234,17 @@ static esp_err_t stream_handler(httpd_req_t *req)
                 _jpg_buf = frame->buf;
                 _jpg_buf_len = frame->len;
             }
-            else if (downsample_rgb565_2x(frame, preview_buf))
+            else if (fast_encoder_ready && stream_jpeg_encode(&encoder, frame, &_jpg_buf, &_jpg_buf_len))
             {
-                if (!fmt2jpg(preview_buf, STREAM_PREVIEW_BUFFER_SIZE,
-                             STREAM_PREVIEW_WIDTH, STREAM_PREVIEW_HEIGHT,
-                             PIXFORMAT_RGB565, STREAM_JPEG_QUALITY,
-                             &_jpg_buf, &_jpg_buf_len))
-                {
-                    ESP_LOGE(TAG, "Preview JPEG compression failed");
-                    res = ESP_FAIL;
-                }
             }
             else if (!frame2jpg(frame, STREAM_JPEG_QUALITY, &_jpg_buf, &_jpg_buf_len))
             {
                 ESP_LOGE(TAG, "JPEG compression failed");
                 res = ESP_FAIL;
+            }
+            else
+            {
+                jpg_buf_allocated = true;
             }
         }
         else
@@ -229,13 +259,8 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
         if (res == ESP_OK)
         {
-            int64_t capture_time_us = (int64_t)_timestamp.tv_sec * 1000000LL + _timestamp.tv_usec;
-            int64_t frame_age_ms = (esp_timer_get_time() - capture_time_us) / 1000;
-            if (frame_age_ms < 0)
-                frame_age_ms = 0;
             size_t hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART, _jpg_buf_len,
-                                   (long long)_timestamp.tv_sec, (long long)_timestamp.tv_usec,
-                                   (long long)frame_age_ms);
+                                   (long long)_timestamp.tv_sec, (long long)_timestamp.tv_usec);
             res = httpd_resp_send_chunk(req, (const char *)part_buf, hlen);
         }
 
@@ -244,11 +269,12 @@ static esp_err_t stream_handler(httpd_req_t *req)
             res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
         }
 
-        if (frame->format != PIXFORMAT_JPEG)
+        if (jpg_buf_allocated)
         {
             free(_jpg_buf);
-            _jpg_buf = NULL;
         }
+        _jpg_buf = NULL;
+        _jpg_buf_len = 0;
 
         if (xQueueFrameO)
         {
@@ -269,7 +295,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
         }
     }
 
-    free(preview_buf);
+    stream_jpeg_encoder_deinit(&encoder);
 
     return res;
 }

@@ -22,7 +22,7 @@ static QueueHandle_t xQueuemyvirtualKey = NULL;
 
 static const char TAG[] = "main_AI_version";
 char Version[] = "AI_V1.5.1";
-uint16_t wifi_Mode = 2; 
+uint16_t wifi_Mode = 2; // 0: AP, 1: STA, 2: AP+STA
 extern uint8_t sta_ip_connect[4];
 
 
@@ -32,7 +32,7 @@ extern "C" void app_main(void)
 
     xQueueAIFrame = xQueueCreate(1, sizeof(camera_fb_t *));
 
-    xQueueAIUSERFrame = xQueueCreate(1, sizeof(camera_fb_t *));
+    xQueueAIUSERFrame = xQueueCreate(2, sizeof(camera_fb_t *));
 
     xQueuemyvirtualKey = xQueueCreate(1, sizeof(int *));
 
@@ -41,7 +41,7 @@ extern "C" void app_main(void)
     app_mywifi_main();
 
     //摄像头相关
-    my_register_camera(PIXFORMAT_RGB565, FRAMESIZE_QVGA, 3, xQueueAIFrame);// FRAMESIZE_VGA,会卡， _240X240
+    my_register_camera(PIXFORMAT_YUV422, FRAMESIZE_QVGA, 2, xQueueAIFrame);
     app_mymdns_main();
 
     register_httpd(xQueueAIFrame, NULL, true);//图传服务

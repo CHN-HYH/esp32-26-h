@@ -30,9 +30,9 @@ extern "C" void app_main(void)
 {
     uint8_t ver_data[50]="\0";
 
-    xQueueAIFrame = xQueueCreate(2, sizeof(camera_fb_t *));
+    xQueueAIFrame = xQueueCreate(1, sizeof(camera_fb_t *));
 
-    xQueueAIUSERFrame = xQueueCreate(2, sizeof(camera_fb_t *));
+    xQueueAIUSERFrame = xQueueCreate(1, sizeof(camera_fb_t *));
 
     xQueuemyvirtualKey = xQueueCreate(1, sizeof(int *));
 
@@ -41,7 +41,7 @@ extern "C" void app_main(void)
     app_mywifi_main();
 
     //摄像头相关
-    my_register_camera(PIXFORMAT_RGB565, FRAMESIZE_QVGA, 2, xQueueAIFrame);// FRAMESIZE_VGA,会卡， _240X240
+    my_register_camera(PIXFORMAT_RGB565, FRAMESIZE_QVGA, 3, xQueueAIFrame);// FRAMESIZE_VGA,会卡， _240X240
     app_mymdns_main();
 
     register_httpd(xQueueAIFrame, NULL, true);//图传服务

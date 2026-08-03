@@ -11,8 +11,19 @@ static void task_process_handler(void *arg)
     while (true)
     {
         camera_fb_t *frame = esp_camera_fb_get();
-        if (frame)
-            xQueueSend(xQueueFrameO, &frame, portMAX_DELAY);
+        if (!frame)
+            continue;
+
+        if (xQueueSend(xQueueFrameO, &frame, 0) == pdTRUE)
+            continue;
+
+        // 队列只保留最新帧，避免网络变慢后持续播放历史画面。
+        camera_fb_t *stale_frame = NULL;
+        if (xQueueReceive(xQueueFrameO, &stale_frame, 0) == pdTRUE)
+            esp_camera_fb_return(stale_frame);
+
+        if (xQueueSend(xQueueFrameO, &frame, 0) != pdTRUE)
+            esp_camera_fb_return(frame);
     }
 }
 
@@ -63,7 +74,7 @@ void my_register_camera(const pixformat_t pixel_fromat,
     config.jpeg_quality = 12;
     config.fb_count = fb_count;
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    config.grab_mode = CAMERA_GRAB_LATEST;
 
     // camera init
     esp_err_t err = esp_camera_init(&config);

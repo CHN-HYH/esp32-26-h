@@ -8,15 +8,16 @@ static const char *TAG = "yahboom_camera";
 static QueueHandle_t xQueueFrameO = NULL;
 
 // 桌面背景差分测试参数：上电后自动采集空场景。
-#define BACKGROUND_START_DELAY_MS      5000
+#define BACKGROUND_START_DELAY_MS     15000
 #define BACKGROUND_WARMUP_FRAMES          20
 #define BACKGROUND_CAPTURE_FRAMES          8
-#define DIFFERENCE_CIRCLE_THRESHOLD       35
 #define DIFFERENCE_CIRCLE_SCAN_STEP        2
 #define DIFFERENCE_CIRCLE_EDGE_MARGIN      8
-#define DIFFERENCE_CIRCLE_MIN_AREA         80
-#define DIFFERENCE_CIRCLE_MIN_FILL_PERCENT 45
-#define DIFFERENCE_CIRCLE_MAX_FILL_PERCENT 95
+#define DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD 35
+#define DIFFERENCE_CIRCLE_DARK_THRESHOLD   15
+#define DIFFERENCE_CIRCLE_MIN_AREA         40
+#define DIFFERENCE_CIRCLE_MIN_FILL_PERCENT 35
+#define DIFFERENCE_CIRCLE_MAX_FILL_PERCENT 100
 #define DIFFERENCE_CIRCLE_LOST_COUNT        3
 #define DETECTION_BOX_Y                    235
 #define DETECTION_BOX_CB                   128
@@ -25,16 +26,27 @@ static QueueHandle_t xQueueFrameO = NULL;
 #define DETECTION_CROSS_CB                  85
 #define DETECTION_CROSS_CR                 255
 #define DETECTION_CROSS_RADIUS              10
+#define START_BANNER_DURATION_MS           3000
+#define START_BANNER_Y                      16
+#define START_BANNER_CB                    128
+#define START_BANNER_CR                    128
+#define START_TEXT_Y                       235
+#define START_TEXT_CB                      128
+#define START_TEXT_CR                      128
 
 static uint8_t *background_y = NULL;
 static size_t background_pixel_count = 0;
 static uint16_t background_width = 0;
 static uint16_t background_height = 0;
 static TickType_t background_delay_start_tick = 0;
+static TickType_t recognition_start_tick = 0;
 static bool background_delay_started = false;
 static uint8_t background_warmup_count = 0;
 static uint8_t background_capture_count = 0;
 static bool background_ready = false;
+static uint8_t *difference_mask = NULL;
+static uint16_t *difference_queue = NULL;
+static size_t difference_mask_capacity = 0;
 
 static void draw_yuv422_pixel(camera_fb_t *frame, int x, int y,
                                uint8_t brightness, uint8_t chroma_blue, uint8_t chroma_red)
@@ -71,6 +83,58 @@ static void draw_detection_marker(camera_fb_t *frame, int min_x, int min_y, int 
                            DETECTION_CROSS_Y, DETECTION_CROSS_CB, DETECTION_CROSS_CR);
         draw_yuv422_pixel(frame, center_x, center_y + offset,
                            DETECTION_CROSS_Y, DETECTION_CROSS_CB, DETECTION_CROSS_CR);
+    }
+}
+
+static void draw_start_banner(camera_fb_t *frame)
+{
+    // 5x7 点阵字体，依次为 S、T、A、R、T。
+    static const uint8_t start_font[5][7] = {
+        {0x0f, 0x10, 0x0e, 0x01, 0x1e, 0x10, 0x0f},
+        {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
+        {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11},
+        {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11},
+        {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
+    };
+    const int scale = frame->width >= 200 ? 3 : 2;
+    const int origin_x = 8;
+    const int origin_y = 8;
+    const int glyph_width = 5 * scale;
+    const int glyph_height = 7 * scale;
+    const int text_width = glyph_width * 5 + scale * 4;
+    const int banner_width = text_width + scale * 4;
+    const int banner_height = glyph_height + scale * 4;
+
+    if (recognition_start_tick == 0 ||
+        xTaskGetTickCount() - recognition_start_tick >= pdMS_TO_TICKS(START_BANNER_DURATION_MS))
+        return;
+
+    for (int y = origin_y; y < origin_y + banner_height; y++)
+    {
+        for (int x = origin_x; x < origin_x + banner_width; x++)
+            draw_yuv422_pixel(frame, x, y, START_BANNER_Y, START_BANNER_CB, START_BANNER_CR);
+    }
+
+    for (int character = 0; character < 5; character++)
+    {
+        int glyph_x = origin_x + scale * 2 + character * (glyph_width + scale);
+        int glyph_y = origin_y + scale * 2;
+        for (int row = 0; row < 7; row++)
+        {
+            for (int column = 0; column < 5; column++)
+            {
+                if ((start_font[character][row] & (1 << (4 - column))) == 0)
+                    continue;
+
+                for (int offset_y = 0; offset_y < scale; offset_y++)
+                {
+                    for (int offset_x = 0; offset_x < scale; offset_x++)
+                        draw_yuv422_pixel(frame, glyph_x + column * scale + offset_x,
+                                          glyph_y + row * scale + offset_y,
+                                          START_TEXT_Y, START_TEXT_CB, START_TEXT_CR);
+                }
+            }
+        }
     }
 }
 
@@ -137,6 +201,7 @@ static bool capture_background(const camera_fb_t *frame)
         if (background_capture_count == BACKGROUND_CAPTURE_FRAMES)
         {
             background_ready = true;
+            recognition_start_tick = xTaskGetTickCount();
             ESP_LOGI(TAG, "BACKGROUND_READY: start recognition");
         }
     }
@@ -172,75 +237,166 @@ static void update_circle_detection_state(bool circle_found)
 static void detect_difference_circle(camera_fb_t *frame)
 {
     static uint8_t detect_frame_count = 0;
-    uint32_t changed_pixel_count = 0;
-    uint32_t sum_x = 0;
-    uint32_t sum_y = 0;
-    int min_x;
-    int min_y;
-    int max_x;
-    int max_y;
+    const int sample_width = (frame->width - 2 * DIFFERENCE_CIRCLE_EDGE_MARGIN +
+                              DIFFERENCE_CIRCLE_SCAN_STEP - 1) /
+                             DIFFERENCE_CIRCLE_SCAN_STEP;
+    const int sample_height = (frame->height - 2 * DIFFERENCE_CIRCLE_EDGE_MARGIN +
+                               DIFFERENCE_CIRCLE_SCAN_STEP - 1) /
+                              DIFFERENCE_CIRCLE_SCAN_STEP;
+    const size_t sample_count = (size_t)sample_width * sample_height;
 
     if (!capture_background(frame))
         return;
 
     // 每三帧检测一次，避免本次可行性测试影响当前图传帧率。
     if (++detect_frame_count < 3)
+    {
+        draw_start_banner(frame);
         return;
+    }
     detect_frame_count = 0;
 
-    min_x = frame->width;
-    min_y = frame->height;
-    max_x = -1;
-    max_y = -1;
-
-    for (int y = DIFFERENCE_CIRCLE_EDGE_MARGIN; y < frame->height - DIFFERENCE_CIRCLE_EDGE_MARGIN; y += DIFFERENCE_CIRCLE_SCAN_STEP)
+    if (difference_mask_capacity < sample_count)
     {
-        for (int x = DIFFERENCE_CIRCLE_EDGE_MARGIN; x < frame->width - DIFFERENCE_CIRCLE_EDGE_MARGIN; x += DIFFERENCE_CIRCLE_SCAN_STEP)
+        uint8_t *new_mask = (uint8_t *)heap_caps_malloc(sample_count, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        uint16_t *new_queue = (uint16_t *)heap_caps_malloc(sample_count * sizeof(uint16_t),
+                                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (new_mask == NULL || new_queue == NULL)
         {
-            size_t pixel_index = y * frame->width + x;
-            int difference = (int)frame->buf[pixel_index * 2] - background_y[pixel_index];
-            if (difference < 0)
-                difference = -difference;
-            if (difference <= DIFFERENCE_CIRCLE_THRESHOLD)
-                continue;
+            if (new_mask != NULL)
+                heap_caps_free(new_mask);
+            if (new_queue != NULL)
+                heap_caps_free(new_queue);
+            ESP_LOGE(TAG, "DIFF_CIRCLE: component buffer allocation failed");
+            return;
+        }
+        if (difference_mask != NULL)
+            heap_caps_free(difference_mask);
+        if (difference_queue != NULL)
+            heap_caps_free(difference_queue);
+        difference_mask = new_mask;
+        difference_queue = new_queue;
+        difference_mask_capacity = sample_count;
+    }
 
-            changed_pixel_count++;
-            sum_x += x;
-            sum_y += y;
-            if (x < min_x) min_x = x;
-            if (x > max_x) max_x = x;
-            if (y < min_y) min_y = y;
-            if (y > max_y) max_y = y;
+    for (int sample_y = 0; sample_y < sample_height; sample_y++)
+    {
+        int y = DIFFERENCE_CIRCLE_EDGE_MARGIN + sample_y * DIFFERENCE_CIRCLE_SCAN_STEP;
+        for (int sample_x = 0; sample_x < sample_width; sample_x++)
+        {
+            int x = DIFFERENCE_CIRCLE_EDGE_MARGIN + sample_x * DIFFERENCE_CIRCLE_SCAN_STEP;
+            size_t pixel_index = y * frame->width + x;
+            int signed_difference = (int)frame->buf[pixel_index * 2] - background_y[pixel_index];
+            int difference = signed_difference < 0 ? -signed_difference : signed_difference;
+            difference_mask[sample_y * sample_width + sample_x] =
+                (difference > DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD ||
+                 signed_difference < -DIFFERENCE_CIRCLE_DARK_THRESHOLD) ? 1 : 0;
         }
     }
 
     bool circle_found = false;
-    if (changed_pixel_count * DIFFERENCE_CIRCLE_SCAN_STEP * DIFFERENCE_CIRCLE_SCAN_STEP >= DIFFERENCE_CIRCLE_MIN_AREA)
-    {
-        int width = max_x - min_x + DIFFERENCE_CIRCLE_SCAN_STEP;
-        int height = max_y - min_y + DIFFERENCE_CIRCLE_SCAN_STEP;
-        uint32_t box_area = width * height;
-        uint32_t fill_percent = changed_pixel_count * DIFFERENCE_CIRCLE_SCAN_STEP * DIFFERENCE_CIRCLE_SCAN_STEP * 100 / box_area;
+    uint32_t best_area = 0;
+    int best_min_x = 0;
+    int best_min_y = 0;
+    int best_max_x = 0;
+    int best_max_y = 0;
+    int best_center_x = 0;
+    int best_center_y = 0;
 
-        // 单个圆的外接矩形近似正方形，圆在外接矩形中的填充率约为 78%。
-        if (width * 100 >= height * 65 && width * 100 <= height * 135 &&
-            fill_percent >= DIFFERENCE_CIRCLE_MIN_FILL_PERCENT && fill_percent <= DIFFERENCE_CIRCLE_MAX_FILL_PERCENT)
+    for (int start_y = 0; start_y < sample_height; start_y++)
+    {
+        for (int start_x = 0; start_x < sample_width; start_x++)
         {
-            int center_x = sum_x / changed_pixel_count;
-            int center_y = sum_y / changed_pixel_count;
-            uint32_t estimated_area = changed_pixel_count * DIFFERENCE_CIRCLE_SCAN_STEP * DIFFERENCE_CIRCLE_SCAN_STEP;
+            size_t start_index = start_y * sample_width + start_x;
+            if (difference_mask[start_index] == 0)
+                continue;
+
+            uint16_t queue_size = 0;
+            uint32_t component_count = 0;
+            uint32_t sum_x = 0;
+            uint32_t sum_y = 0;
+            int min_x = frame->width;
+            int min_y = frame->height;
+            int max_x = -1;
+            int max_y = -1;
+            difference_queue[queue_size++] = (uint16_t)start_index;
+            difference_mask[start_index] = 2;
+
+            while (queue_size > 0)
+            {
+                uint16_t current_index = difference_queue[--queue_size];
+                int current_x = current_index % sample_width;
+                int current_y = current_index / sample_width;
+                int pixel_x = DIFFERENCE_CIRCLE_EDGE_MARGIN + current_x * DIFFERENCE_CIRCLE_SCAN_STEP;
+                int pixel_y = DIFFERENCE_CIRCLE_EDGE_MARGIN + current_y * DIFFERENCE_CIRCLE_SCAN_STEP;
+                component_count++;
+                sum_x += pixel_x;
+                sum_y += pixel_y;
+                if (pixel_x < min_x) min_x = pixel_x;
+                if (pixel_x > max_x) max_x = pixel_x;
+                if (pixel_y < min_y) min_y = pixel_y;
+                if (pixel_y > max_y) max_y = pixel_y;
+
+                const int neighbor_x[8] = {current_x - 1, current_x + 1, current_x, current_x,
+                                           current_x - 1, current_x + 1, current_x - 1, current_x + 1};
+                const int neighbor_y[8] = {current_y, current_y, current_y - 1, current_y + 1,
+                                           current_y - 1, current_y - 1, current_y + 1, current_y + 1};
+                for (int neighbor = 0; neighbor < 8; neighbor++)
+                {
+                    if (neighbor_x[neighbor] < 0 || neighbor_x[neighbor] >= sample_width ||
+                        neighbor_y[neighbor] < 0 || neighbor_y[neighbor] >= sample_height)
+                        continue;
+                    size_t neighbor_index = neighbor_y[neighbor] * sample_width + neighbor_x[neighbor];
+                    if (difference_mask[neighbor_index] == 1 && queue_size < sample_count)
+                    {
+                        difference_mask[neighbor_index] = 2;
+                        difference_queue[queue_size++] = (uint16_t)neighbor_index;
+                    }
+                }
+            }
+
+            uint32_t estimated_area = component_count * DIFFERENCE_CIRCLE_SCAN_STEP * DIFFERENCE_CIRCLE_SCAN_STEP;
+            if (estimated_area < DIFFERENCE_CIRCLE_MIN_AREA)
+                continue;
+
+            int width = max_x - min_x + DIFFERENCE_CIRCLE_SCAN_STEP;
+            int height = max_y - min_y + DIFFERENCE_CIRCLE_SCAN_STEP;
+            uint32_t box_area = width * height;
+            uint32_t fill_percent = estimated_area * 100 / box_area;
+            if (width * 100 < height * 55 || width * 100 > height * 145 ||
+                fill_percent < DIFFERENCE_CIRCLE_MIN_FILL_PERCENT ||
+                fill_percent > DIFFERENCE_CIRCLE_MAX_FILL_PERCENT ||
+                estimated_area <= best_area)
+                continue;
+
+            best_area = estimated_area;
+            best_min_x = min_x;
+            best_min_y = min_y;
+            best_max_x = max_x;
+            best_max_y = max_y;
+            best_center_x = sum_x / component_count;
+            best_center_y = sum_y / component_count;
             circle_found = true;
-            draw_detection_marker(frame, min_x, min_y,
-                                  max_x + DIFFERENCE_CIRCLE_SCAN_STEP - 1,
-                                  max_y + DIFFERENCE_CIRCLE_SCAN_STEP - 1,
-                                  center_x, center_y);
-            ESP_LOGI(TAG, "DIFF_CIRCLE x=%d y=%d w=%d h=%d area=%lu fill=%lu%%",
-                     center_x, center_y, width, height,
-                     (unsigned long)estimated_area, (unsigned long)fill_percent);
         }
     }
 
+    if (circle_found)
+    {
+        int width = best_max_x - best_min_x + DIFFERENCE_CIRCLE_SCAN_STEP;
+        int height = best_max_y - best_min_y + DIFFERENCE_CIRCLE_SCAN_STEP;
+        uint32_t box_area = width * height;
+        uint32_t fill_percent = best_area * 100 / box_area;
+        draw_detection_marker(frame, best_min_x, best_min_y,
+                              best_max_x + DIFFERENCE_CIRCLE_SCAN_STEP - 1,
+                              best_max_y + DIFFERENCE_CIRCLE_SCAN_STEP - 1,
+                              best_center_x, best_center_y);
+        ESP_LOGI(TAG, "DIFF_CIRCLE x=%d y=%d w=%d h=%d area=%lu fill=%lu%%",
+                 best_center_x, best_center_y, width, height,
+                 (unsigned long)best_area, (unsigned long)fill_percent);
+    }
+
     update_circle_detection_state(circle_found);
+    draw_start_banner(frame);
 }
 
 static void task_process_handler(void *arg)

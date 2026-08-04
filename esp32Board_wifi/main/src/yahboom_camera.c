@@ -393,6 +393,7 @@ static void detect_difference_circle(camera_fb_t *frame)
         difference_mask_capacity = sample_count;
     }
 
+    size_t foreground_sample_count = 0;
     for (int sample_y = 0; sample_y < sample_height; sample_y++)
     {
         int y = roi_top + sample_y * DIFFERENCE_CIRCLE_SCAN_STEP;
@@ -402,10 +403,35 @@ static void detect_difference_circle(camera_fb_t *frame)
             size_t pixel_index = y * frame->width + x;
             int signed_difference = (int)frame->buf[pixel_index * 2] - background_y[pixel_index] - light_offset;
             int difference = signed_difference < 0 ? -signed_difference : signed_difference;
-            difference_mask[sample_y * sample_width + sample_x] =
-                (difference > DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD ||
-                 signed_difference < -DIFFERENCE_CIRCLE_DARK_THRESHOLD) ? 1 : 0;
+            bool is_foreground = difference > DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD ||
+                                 signed_difference < -DIFFERENCE_CIRCLE_DARK_THRESHOLD;
+            difference_mask[sample_y * sample_width + sample_x] = is_foreground ? 1 : 0;
+            if (is_foreground)
+                foreground_sample_count++;
         }
+    }
+
+    // 钢珠只应覆盖 ROI 的小部分；大面积变化通常是光照或遮挡扰动。
+    if (foreground_sample_count * 100 > sample_count * DETECTION_MAX_FOREGROUND_PERCENT)
+    {
+        TickType_t now = xTaskGetTickCount();
+        if (last_detection_log_tick == 0 ||
+            now - last_detection_log_tick >= pdMS_TO_TICKS(DETECTION_LOG_INTERVAL_MS))
+        {
+            last_detection_log_tick = now;
+            ESP_LOGI(TAG, "DIFF_LIGHT_DISTURBANCE changed=%u total=%u offset=%d",
+                     (unsigned)foreground_sample_count, (unsigned)sample_count, light_offset);
+        }
+
+        if (++tracking_missing_count >= DIFFERENCE_CIRCLE_LOST_COUNT)
+        {
+            tracked_position_valid = false;
+            tracking_missing_count = 0;
+        }
+        update_circle_detection_state(false);
+        draw_detection_roi(frame);
+        draw_status_banner(frame);
+        return;
     }
 
     bool candidate_found = false;

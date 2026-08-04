@@ -229,6 +229,7 @@
 #define DIFFERENCE_CIRCLE_EDGE_MARGIN           0     // 画面安全边缘宽度，单位：像素
 #define DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD      35    // 补偿后比背景更亮时的最小亮度差
 #define DIFFERENCE_CIRCLE_DARK_THRESHOLD        15    // 补偿后比背景更暗时的最小亮度差
+#define DETECTION_MAX_FOREGROUND_PERCENT        25    // 前景超过 ROI 的该比例时，判定为光照或遮挡扰动
 #define DIFFERENCE_CIRCLE_MIN_AREA              40    // 有效圆形候选的最小估算面积，单位：像素
 #define DIFFERENCE_CIRCLE_MIN_FILL_PERCENT      35    // 候选区域在外接框中的最小填充率，单位：%
 #define DIFFERENCE_CIRCLE_LOST_COUNT            3     // 连续丢失多少个检测周期后判定目标离开

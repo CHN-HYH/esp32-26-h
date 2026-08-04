@@ -222,9 +222,9 @@
 #define BACKGROUND_WARMUP_FRAMES                20    // 等待结束后丢弃的相机稳定帧数
 #define BACKGROUND_CAPTURE_FRAMES               8     // 用于平均生成空场景背景的帧数
 #define DETECTION_ROI_X                         0    // 识别区域左上角 X 坐标
-#define DETECTION_ROI_Y                         80    // 识别区域左上角 Y 坐标
+#define DETECTION_ROI_Y                         90    // 识别区域左上角 Y 坐标
 #define DETECTION_ROI_WIDTH                     320   // 识别区域宽度，单位：像素
-#define DETECTION_ROI_HEIGHT                    80   // 识别区域高度，单位：像素
+#define DETECTION_ROI_HEIGHT                    60   // 识别区域高度，单位：像素
 #define DIFFERENCE_CIRCLE_SCAN_STEP             2     // 差分扫描步长
 #define DIFFERENCE_CIRCLE_EDGE_MARGIN           0     // 画面安全边缘宽度，单位：像素
 #define DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD      35    // 补偿后比背景更亮时的最小亮度差

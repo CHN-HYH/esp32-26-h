@@ -8,31 +8,31 @@ static const char *TAG = "yahboom_camera";
 static QueueHandle_t xQueueFrameO = NULL;
 
 // 桌面背景差分测试参数：上电后自动采集空场景。
-#define BACKGROUND_START_DELAY_MS     15000
-#define BACKGROUND_WARMUP_FRAMES          20
-#define BACKGROUND_CAPTURE_FRAMES          8
-#define DIFFERENCE_CIRCLE_SCAN_STEP        2
-#define DIFFERENCE_CIRCLE_EDGE_MARGIN      8
-#define DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD 35
-#define DIFFERENCE_CIRCLE_DARK_THRESHOLD   15
-#define DIFFERENCE_CIRCLE_MIN_AREA         40
-#define DIFFERENCE_CIRCLE_MIN_FILL_PERCENT 35
-#define DIFFERENCE_CIRCLE_MAX_FILL_PERCENT 100
-#define DIFFERENCE_CIRCLE_LOST_COUNT        3
-#define DETECTION_BOX_Y                    235
-#define DETECTION_BOX_CB                   128
-#define DETECTION_BOX_CR                   128
-#define DETECTION_CROSS_Y                   76
-#define DETECTION_CROSS_CB                  85
-#define DETECTION_CROSS_CR                 255
-#define DETECTION_CROSS_RADIUS              10
-#define START_BANNER_DURATION_MS           3000
-#define START_BANNER_Y                      16
-#define START_BANNER_CB                    128
-#define START_BANNER_CR                    128
-#define START_TEXT_Y                       235
-#define START_TEXT_CB                      128
-#define START_TEXT_CR                      128
+#define BACKGROUND_START_DELAY_MS               10000       // 上电后等待空场景稳定的时间，单位：ms
+#define BACKGROUND_WARMUP_FRAMES                20          // 等待结束后丢弃的相机稳定帧数
+#define BACKGROUND_CAPTURE_FRAMES               8           // 用于平均生成空场景背景的帧数
+#define DIFFERENCE_CIRCLE_SCAN_STEP             2           // 差分扫描步长，2 表示每隔 2 个像素取一个样本
+#define DIFFERENCE_CIRCLE_EDGE_MARGIN           8           // 不参与识别的画面边缘宽度，单位：像素
+#define DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD      35          // 当前像素比背景更亮时的最小亮度差
+#define DIFFERENCE_CIRCLE_DARK_THRESHOLD        15          // 当前像素比背景更暗时的最小亮度差，适应钢珠暗部   
+#define DIFFERENCE_CIRCLE_MIN_AREA              40          // 有效圆形候选的最小估算面积，单位：像素
+#define DIFFERENCE_CIRCLE_MIN_FILL_PERCENT      35          // 候选区域在外接框中的最小填充率，单位：%
+#define DIFFERENCE_CIRCLE_MAX_FILL_PERCENT      100         // 候选区域在外接框中的最大填充率，单位：%
+#define DIFFERENCE_CIRCLE_LOST_COUNT            3           // 连续丢失多少个检测周期后判定目标离开
+#define DETECTION_BOX_Y                         235         // 识别外接框颜色的 YUV 亮度 Y，接近白色
+#define DETECTION_BOX_CB                        128         // 识别外接框颜色的 YUV 蓝色色度 Cb，中性
+#define DETECTION_BOX_CR                        128         // 识别外接框颜色的 YUV 红色色度 Cr，中性
+#define DETECTION_CROSS_Y                       76          // 中心十字颜色的 YUV 亮度 Y
+#define DETECTION_CROSS_CB                      85          // 中心十字颜色的 YUV 蓝色色度 Cb
+#define DETECTION_CROSS_CR                      255         // 中心十字颜色的 YU  V 红色色度 Cr，组合后为红色
+#define DETECTION_CROSS_RADIUS                  10          // 中心十字从中心向四个方向延伸的长度，单位：像素
+#define START_BANNER_DURATION_MS                3000        // 背景采集完成后 START 提示的显示时间，单位：ms
+#define START_BANNER_Y                          16          // WAIT/START 提示底色的 YUV 亮度 Y，接近黑色
+#define START_BANNER_CB                         128         // WAIT/START 提示底色的 YUV 蓝色色度 Cb，中性
+#define START_BANNER_CR                         128         // WAIT/START 提示底色的 YUV 红色色度 Cr，中性
+#define START_TEXT_Y                            235         // WAIT/START 文字颜色的 YUV 亮度 Y，接近白色
+#define START_TEXT_CB                           128         // WAIT/START 文字颜色的 YUV 蓝色色度 Cb，中性
+#define START_TEXT_CR                           128         // WAIT/START 文字颜色的 YUV 红色色度 Cr，中性
 
 static uint8_t *background_y = NULL;
 static size_t background_pixel_count = 0;
@@ -86,9 +86,9 @@ static void draw_detection_marker(camera_fb_t *frame, int min_x, int min_y, int 
     }
 }
 
-static void draw_start_banner(camera_fb_t *frame)
+static void draw_status_banner(camera_fb_t *frame)
 {
-    // 5x7 点阵字体，依次为 S、T、A、R、T。
+    // 5x7 点阵字体。
     static const uint8_t start_font[5][7] = {
         {0x0f, 0x10, 0x0e, 0x01, 0x1e, 0x10, 0x0f},
         {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
@@ -96,18 +96,40 @@ static void draw_start_banner(camera_fb_t *frame)
         {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11},
         {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
     };
+    static const uint8_t wait_font[4][7] = {
+        {0x11, 0x11, 0x11, 0x11, 0x15, 0x15, 0x0a},
+        {0x0e, 0x11, 0x11, 0x11, 0x1f, 0x11, 0x11},
+        {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1f},
+        {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
+    };
+    const uint8_t (*font)[7] = NULL;
+    int character_count = 0;
     const int scale = frame->width >= 200 ? 3 : 2;
     const int origin_x = 8;
     const int origin_y = 8;
     const int glyph_width = 5 * scale;
     const int glyph_height = 7 * scale;
-    const int text_width = glyph_width * 5 + scale * 4;
+
+    if (background_delay_started && !background_ready &&
+        xTaskGetTickCount() - background_delay_start_tick < pdMS_TO_TICKS(BACKGROUND_START_DELAY_MS))
+    {
+        font = wait_font;
+        character_count = 4;
+    }
+    else if (recognition_start_tick != 0 &&
+             xTaskGetTickCount() - recognition_start_tick < pdMS_TO_TICKS(START_BANNER_DURATION_MS))
+    {
+        font = start_font;
+        character_count = 5;
+    }
+    else
+    {
+        return;
+    }
+
+    const int text_width = glyph_width * character_count + scale * (character_count - 1);
     const int banner_width = text_width + scale * 4;
     const int banner_height = glyph_height + scale * 4;
-
-    if (recognition_start_tick == 0 ||
-        xTaskGetTickCount() - recognition_start_tick >= pdMS_TO_TICKS(START_BANNER_DURATION_MS))
-        return;
 
     for (int y = origin_y; y < origin_y + banner_height; y++)
     {
@@ -115,7 +137,7 @@ static void draw_start_banner(camera_fb_t *frame)
             draw_yuv422_pixel(frame, x, y, START_BANNER_Y, START_BANNER_CB, START_BANNER_CR);
     }
 
-    for (int character = 0; character < 5; character++)
+    for (int character = 0; character < character_count; character++)
     {
         int glyph_x = origin_x + scale * 2 + character * (glyph_width + scale);
         int glyph_y = origin_y + scale * 2;
@@ -123,7 +145,7 @@ static void draw_start_banner(camera_fb_t *frame)
         {
             for (int column = 0; column < 5; column++)
             {
-                if ((start_font[character][row] & (1 << (4 - column))) == 0)
+                if ((font[character][row] & (1 << (4 - column))) == 0)
                     continue;
 
                 for (int offset_y = 0; offset_y < scale; offset_y++)
@@ -246,12 +268,15 @@ static void detect_difference_circle(camera_fb_t *frame)
     const size_t sample_count = (size_t)sample_width * sample_height;
 
     if (!capture_background(frame))
+    {
+        draw_status_banner(frame);
         return;
+    }
 
     // 每三帧检测一次，避免本次可行性测试影响当前图传帧率。
     if (++detect_frame_count < 3)
     {
-        draw_start_banner(frame);
+        draw_status_banner(frame);
         return;
     }
     detect_frame_count = 0;
@@ -396,7 +421,7 @@ static void detect_difference_circle(camera_fb_t *frame)
     }
 
     update_circle_detection_state(circle_found);
-    draw_start_banner(frame);
+    draw_status_banner(frame);
 }
 
 static void task_process_handler(void *arg)

@@ -22,7 +22,7 @@ static QueueHandle_t xQueuemyvirtualKey = NULL;
 
 static const char TAG[] = "main_AI_version";
 char Version[] = "AI_V1.5.1";
-uint16_t wifi_Mode = 2; // 0: AP, 1: STA, 2: AP+STA
+uint16_t wifi_Mode = 1; // 0: AP, 1: STA, 2: AP+STA
 extern uint8_t sta_ip_connect[4];
 
 

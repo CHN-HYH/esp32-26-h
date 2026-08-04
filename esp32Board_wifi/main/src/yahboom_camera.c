@@ -1,38 +1,25 @@
 #include "yahboom_camera.h"
-#include "my_usart.h"
 #include "esp_log.h"
-#include "esp_system.h"
 #include "esp_heap_caps.h"
+#include <string.h>
 
 static const char *TAG = "yahboom_camera";
 static QueueHandle_t xQueueFrameO = NULL;
 
-// 桌面背景差分测试参数：上电后自动采集空场景。
-#define BACKGROUND_START_DELAY_MS               10000       // 上电后等待空场景稳定的时间，单位：ms
-#define BACKGROUND_WARMUP_FRAMES                20          // 等待结束后丢弃的相机稳定帧数
-#define BACKGROUND_CAPTURE_FRAMES               8           // 用于平均生成空场景背景的帧数
-#define DIFFERENCE_CIRCLE_SCAN_STEP             2           // 差分扫描步长，2 表示每隔 2 个像素取一个样本
-#define DIFFERENCE_CIRCLE_EDGE_MARGIN           8           // 不参与识别的画面边缘宽度，单位：像素
-#define DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD      35          // 当前像素比背景更亮时的最小亮度差
-#define DIFFERENCE_CIRCLE_DARK_THRESHOLD        15          // 当前像素比背景更暗时的最小亮度差，适应钢珠暗部   
-#define DIFFERENCE_CIRCLE_MIN_AREA              40          // 有效圆形候选的最小估算面积，单位：像素
-#define DIFFERENCE_CIRCLE_MIN_FILL_PERCENT      35          // 候选区域在外接框中的最小填充率，单位：%
-#define DIFFERENCE_CIRCLE_MAX_FILL_PERCENT      100         // 候选区域在外接框中的最大填充率，单位：%
-#define DIFFERENCE_CIRCLE_LOST_COUNT            3           // 连续丢失多少个检测周期后判定目标离开
-#define DETECTION_BOX_Y                         235         // 识别外接框颜色的 YUV 亮度 Y，接近白色
-#define DETECTION_BOX_CB                        128         // 识别外接框颜色的 YUV 蓝色色度 Cb，中性
-#define DETECTION_BOX_CR                        128         // 识别外接框颜色的 YUV 红色色度 Cr，中性
-#define DETECTION_CROSS_Y                       76          // 中心十字颜色的 YUV 亮度 Y
-#define DETECTION_CROSS_CB                      85          // 中心十字颜色的 YUV 蓝色色度 Cb
-#define DETECTION_CROSS_CR                      255         // 中心十字颜色的 YU  V 红色色度 Cr，组合后为红色
-#define DETECTION_CROSS_RADIUS                  10          // 中心十字从中心向四个方向延伸的长度，单位：像素
-#define START_BANNER_DURATION_MS                3000        // 背景采集完成后 START 提示的显示时间，单位：ms
-#define START_BANNER_Y                          16          // WAIT/START 提示底色的 YUV 亮度 Y，接近黑色
-#define START_BANNER_CB                         128         // WAIT/START 提示底色的 YUV 蓝色色度 Cb，中性
-#define START_BANNER_CR                         128         // WAIT/START 提示底色的 YUV 红色色度 Cr，中性
-#define START_TEXT_Y                            235         // WAIT/START 文字颜色的 YUV 亮度 Y，接近白色
-#define START_TEXT_CB                           128         // WAIT/START 文字颜色的 YUV 蓝色色度 Cb，中性
-#define START_TEXT_CR                           128         // WAIT/START 文字颜色的 YUV 红色色度 Cr，中性
+typedef struct
+{
+    uint8_t y;
+    uint8_t cb;
+    uint8_t cr;
+} yuv422_color_t;
+
+static const yuv422_color_t kDetectionBoxColor = {235, 128, 128};
+static const yuv422_color_t kDetectionCrossColor = {76, 85, 255};
+static const yuv422_color_t kDetectionRoiColor = {150, 255, 100};
+static const yuv422_color_t kStatusBannerColor = {16, 128, 128};
+static const yuv422_color_t kStatusTextColor = {235, 128, 128};
+static const int kDetectionCrossRadius = 10;
+enum { LIGHT_DIFFERENCE_HISTOGRAM_SIZE = 511 };
 
 static uint8_t *background_y = NULL;
 static size_t background_pixel_count = 0;
@@ -47,9 +34,9 @@ static bool background_ready = false;
 static uint8_t *difference_mask = NULL;
 static uint16_t *difference_queue = NULL;
 static size_t difference_mask_capacity = 0;
+static uint16_t light_difference_histogram[LIGHT_DIFFERENCE_HISTOGRAM_SIZE];
 
-static void draw_yuv422_pixel(camera_fb_t *frame, int x, int y,
-                               uint8_t brightness, uint8_t chroma_blue, uint8_t chroma_red)
+static void draw_yuv422_pixel(camera_fb_t *frame, int x, int y, const yuv422_color_t *color)
 {
     if (x < 0 || x >= frame->width || y < 0 || y >= frame->height)
         return;
@@ -57,9 +44,9 @@ static void draw_yuv422_pixel(camera_fb_t *frame, int x, int y,
     // YUV422 的相邻两个像素共用一组 Cb、Cr。
     size_t pixel_offset = (y * frame->width + x) * 2;
     size_t pair_offset = (y * frame->width + (x & ~1)) * 2;
-    frame->buf[pixel_offset] = brightness;
-    frame->buf[pair_offset + 1] = chroma_blue;
-    frame->buf[pair_offset + 3] = chroma_red;
+    frame->buf[pixel_offset] = color->y;
+    frame->buf[pair_offset + 1] = color->cb;
+    frame->buf[pair_offset + 3] = color->cr;
 }
 
 static void draw_detection_marker(camera_fb_t *frame, int min_x, int min_y, int max_x, int max_y,
@@ -67,22 +54,65 @@ static void draw_detection_marker(camera_fb_t *frame, int min_x, int min_y, int 
 {
     for (int x = min_x; x <= max_x; x++)
     {
-        draw_yuv422_pixel(frame, x, min_y, DETECTION_BOX_Y, DETECTION_BOX_CB, DETECTION_BOX_CR);
-        draw_yuv422_pixel(frame, x, max_y, DETECTION_BOX_Y, DETECTION_BOX_CB, DETECTION_BOX_CR);
+        draw_yuv422_pixel(frame, x, min_y, &kDetectionBoxColor);
+        draw_yuv422_pixel(frame, x, max_y, &kDetectionBoxColor);
     }
 
     for (int y = min_y; y <= max_y; y++)
     {
-        draw_yuv422_pixel(frame, min_x, y, DETECTION_BOX_Y, DETECTION_BOX_CB, DETECTION_BOX_CR);
-        draw_yuv422_pixel(frame, max_x, y, DETECTION_BOX_Y, DETECTION_BOX_CB, DETECTION_BOX_CR);
+        draw_yuv422_pixel(frame, min_x, y, &kDetectionBoxColor);
+        draw_yuv422_pixel(frame, max_x, y, &kDetectionBoxColor);
     }
 
-    for (int offset = -DETECTION_CROSS_RADIUS; offset <= DETECTION_CROSS_RADIUS; offset++)
+    for (int offset = -kDetectionCrossRadius; offset <= kDetectionCrossRadius; offset++)
     {
-        draw_yuv422_pixel(frame, center_x + offset, center_y,
-                           DETECTION_CROSS_Y, DETECTION_CROSS_CB, DETECTION_CROSS_CR);
-        draw_yuv422_pixel(frame, center_x, center_y + offset,
-                           DETECTION_CROSS_Y, DETECTION_CROSS_CB, DETECTION_CROSS_CR);
+        draw_yuv422_pixel(frame, center_x + offset, center_y, &kDetectionCrossColor);
+        draw_yuv422_pixel(frame, center_x, center_y + offset, &kDetectionCrossColor);
+    }
+}
+
+static bool get_detection_roi(const camera_fb_t *frame, int *left, int *top, int *right, int *bottom)
+{
+    const int minimum_x = DIFFERENCE_CIRCLE_EDGE_MARGIN;
+    const int minimum_y = DIFFERENCE_CIRCLE_EDGE_MARGIN;
+    const int maximum_x = frame->width - DIFFERENCE_CIRCLE_EDGE_MARGIN;
+    const int maximum_y = frame->height - DIFFERENCE_CIRCLE_EDGE_MARGIN;
+
+    if (maximum_x <= minimum_x || maximum_y <= minimum_y)
+        return false;
+
+    *left = DETECTION_ROI_X < minimum_x ? minimum_x : DETECTION_ROI_X;
+    *top = DETECTION_ROI_Y < minimum_y ? minimum_y : DETECTION_ROI_Y;
+    *right = DETECTION_ROI_X + DETECTION_ROI_WIDTH;
+    *bottom = DETECTION_ROI_Y + DETECTION_ROI_HEIGHT;
+
+    if (*right > maximum_x)
+        *right = maximum_x;
+    if (*bottom > maximum_y)
+        *bottom = maximum_y;
+
+    return *right > *left && *bottom > *top;
+}
+
+static void draw_detection_roi(camera_fb_t *frame)
+{
+    int left;
+    int top;
+    int right;
+    int bottom;
+    if (!get_detection_roi(frame, &left, &top, &right, &bottom))
+        return;
+
+    for (int x = left; x < right; x++)
+    {
+        draw_yuv422_pixel(frame, x, top, &kDetectionRoiColor);
+        draw_yuv422_pixel(frame, x, bottom - 1, &kDetectionRoiColor);
+    }
+
+    for (int y = top; y < bottom; y++)
+    {
+        draw_yuv422_pixel(frame, left, y, &kDetectionRoiColor);
+        draw_yuv422_pixel(frame, right - 1, y, &kDetectionRoiColor);
     }
 }
 
@@ -117,7 +147,7 @@ static void draw_status_banner(camera_fb_t *frame)
         character_count = 4;
     }
     else if (recognition_start_tick != 0 &&
-             xTaskGetTickCount() - recognition_start_tick < pdMS_TO_TICKS(START_BANNER_DURATION_MS))
+             xTaskGetTickCount() - recognition_start_tick < pdMS_TO_TICKS(STATUS_BANNER_DURATION_MS))
     {
         font = start_font;
         character_count = 5;
@@ -134,7 +164,7 @@ static void draw_status_banner(camera_fb_t *frame)
     for (int y = origin_y; y < origin_y + banner_height; y++)
     {
         for (int x = origin_x; x < origin_x + banner_width; x++)
-            draw_yuv422_pixel(frame, x, y, START_BANNER_Y, START_BANNER_CB, START_BANNER_CR);
+            draw_yuv422_pixel(frame, x, y, &kStatusBannerColor);
     }
 
     for (int character = 0; character < character_count; character++)
@@ -152,8 +182,7 @@ static void draw_status_banner(camera_fb_t *frame)
                 {
                     for (int offset_x = 0; offset_x < scale; offset_x++)
                         draw_yuv422_pixel(frame, glyph_x + column * scale + offset_x,
-                                          glyph_y + row * scale + offset_y,
-                                          START_TEXT_Y, START_TEXT_CB, START_TEXT_CR);
+                                          glyph_y + row * scale + offset_y, &kStatusTextColor);
                 }
             }
         }
@@ -256,19 +285,71 @@ static void update_circle_detection_state(bool circle_found)
     }
 }
 
+static int calculate_roi_light_offset(const camera_fb_t *frame, int left, int top, int right, int bottom)
+{
+    uint32_t sample_count = 0;
+    uint32_t cumulative_count = 0;
+
+    memset(light_difference_histogram, 0, sizeof(light_difference_histogram));
+
+    for (int y = top; y < bottom; y += DIFFERENCE_CIRCLE_SCAN_STEP)
+    {
+        for (int x = left; x < right; x += DIFFERENCE_CIRCLE_SCAN_STEP)
+        {
+            size_t pixel_index = y * frame->width + x;
+            int difference = (int)frame->buf[pixel_index * 2] - background_y[pixel_index];
+            light_difference_histogram[difference + 255]++;
+            sample_count++;
+        }
+    }
+
+    if (sample_count == 0)
+        return 0;
+
+    const uint32_t median_index = sample_count / 2;
+    for (int index = 0; index < LIGHT_DIFFERENCE_HISTOGRAM_SIZE; index++)
+    {
+        cumulative_count += light_difference_histogram[index];
+        if (cumulative_count > median_index)
+            return index - 255;
+    }
+
+    return 0;
+}
+
 static void detect_difference_circle(camera_fb_t *frame)
 {
     static uint8_t detect_frame_count = 0;
-    const int sample_width = (frame->width - 2 * DIFFERENCE_CIRCLE_EDGE_MARGIN +
+    static bool invalid_roi_reported = false;
+    static TickType_t last_detection_log_tick = 0;
+    int roi_left;
+    int roi_top;
+    int roi_right;
+    int roi_bottom;
+    if (!get_detection_roi(frame, &roi_left, &roi_top, &roi_right, &roi_bottom))
+    {
+        if (!invalid_roi_reported)
+        {
+            ESP_LOGE(TAG, "DIFF_CIRCLE: invalid detection ROI");
+            invalid_roi_reported = true;
+        }
+        update_circle_detection_state(false);
+        draw_status_banner(frame);
+        return;
+    }
+    invalid_roi_reported = false;
+
+    const int sample_width = (roi_right - roi_left +
                               DIFFERENCE_CIRCLE_SCAN_STEP - 1) /
                              DIFFERENCE_CIRCLE_SCAN_STEP;
-    const int sample_height = (frame->height - 2 * DIFFERENCE_CIRCLE_EDGE_MARGIN +
+    const int sample_height = (roi_bottom - roi_top +
                                DIFFERENCE_CIRCLE_SCAN_STEP - 1) /
                               DIFFERENCE_CIRCLE_SCAN_STEP;
     const size_t sample_count = (size_t)sample_width * sample_height;
 
     if (!capture_background(frame))
     {
+        draw_detection_roi(frame);
         draw_status_banner(frame);
         return;
     }
@@ -276,10 +357,14 @@ static void detect_difference_circle(camera_fb_t *frame)
     // 每三帧检测一次，避免本次可行性测试影响当前图传帧率。
     if (++detect_frame_count < 3)
     {
+        draw_detection_roi(frame);
         draw_status_banner(frame);
         return;
     }
     detect_frame_count = 0;
+
+    // 钢珠只占 ROI 的小部分，亮度差的中值可近似表示整帧光照偏移。
+    const int light_offset = calculate_roi_light_offset(frame, roi_left, roi_top, roi_right, roi_bottom);
 
     if (difference_mask_capacity < sample_count)
     {
@@ -306,12 +391,12 @@ static void detect_difference_circle(camera_fb_t *frame)
 
     for (int sample_y = 0; sample_y < sample_height; sample_y++)
     {
-        int y = DIFFERENCE_CIRCLE_EDGE_MARGIN + sample_y * DIFFERENCE_CIRCLE_SCAN_STEP;
+        int y = roi_top + sample_y * DIFFERENCE_CIRCLE_SCAN_STEP;
         for (int sample_x = 0; sample_x < sample_width; sample_x++)
         {
-            int x = DIFFERENCE_CIRCLE_EDGE_MARGIN + sample_x * DIFFERENCE_CIRCLE_SCAN_STEP;
+            int x = roi_left + sample_x * DIFFERENCE_CIRCLE_SCAN_STEP;
             size_t pixel_index = y * frame->width + x;
-            int signed_difference = (int)frame->buf[pixel_index * 2] - background_y[pixel_index];
+            int signed_difference = (int)frame->buf[pixel_index * 2] - background_y[pixel_index] - light_offset;
             int difference = signed_difference < 0 ? -signed_difference : signed_difference;
             difference_mask[sample_y * sample_width + sample_x] =
                 (difference > DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD ||
@@ -352,8 +437,8 @@ static void detect_difference_circle(camera_fb_t *frame)
                 uint16_t current_index = difference_queue[--queue_size];
                 int current_x = current_index % sample_width;
                 int current_y = current_index / sample_width;
-                int pixel_x = DIFFERENCE_CIRCLE_EDGE_MARGIN + current_x * DIFFERENCE_CIRCLE_SCAN_STEP;
-                int pixel_y = DIFFERENCE_CIRCLE_EDGE_MARGIN + current_y * DIFFERENCE_CIRCLE_SCAN_STEP;
+                int pixel_x = roi_left + current_x * DIFFERENCE_CIRCLE_SCAN_STEP;
+                int pixel_y = roi_top + current_y * DIFFERENCE_CIRCLE_SCAN_STEP;
                 component_count++;
                 sum_x += pixel_x;
                 sum_y += pixel_y;
@@ -390,7 +475,6 @@ static void detect_difference_circle(camera_fb_t *frame)
             uint32_t fill_percent = estimated_area * 100 / box_area;
             if (width * 100 < height * 55 || width * 100 > height * 145 ||
                 fill_percent < DIFFERENCE_CIRCLE_MIN_FILL_PERCENT ||
-                fill_percent > DIFFERENCE_CIRCLE_MAX_FILL_PERCENT ||
                 estimated_area <= best_area)
                 continue;
 
@@ -415,12 +499,19 @@ static void detect_difference_circle(camera_fb_t *frame)
                               best_max_x + DIFFERENCE_CIRCLE_SCAN_STEP - 1,
                               best_max_y + DIFFERENCE_CIRCLE_SCAN_STEP - 1,
                               best_center_x, best_center_y);
-        ESP_LOGI(TAG, "DIFF_CIRCLE x=%d y=%d w=%d h=%d area=%lu fill=%lu%%",
-                 best_center_x, best_center_y, width, height,
-                 (unsigned long)best_area, (unsigned long)fill_percent);
+        TickType_t now = xTaskGetTickCount();
+        if (last_detection_log_tick == 0 ||
+            now - last_detection_log_tick >= pdMS_TO_TICKS(DETECTION_LOG_INTERVAL_MS))
+        {
+            last_detection_log_tick = now;
+            ESP_LOGI(TAG, "DIFF_CIRCLE x=%d y=%d w=%d h=%d area=%lu fill=%lu%% offset=%d",
+                     best_center_x, best_center_y, width, height,
+                     (unsigned long)best_area, (unsigned long)fill_percent, light_offset);
+        }
     }
 
     update_circle_detection_state(circle_found);
+    draw_detection_roi(frame);
     draw_status_banner(frame);
 }
 

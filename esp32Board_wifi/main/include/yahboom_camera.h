@@ -217,6 +217,24 @@
 
 #define XCLK_FREQ_HZ 15000000  //GC2145不能调高
 
+// 钢珠背景差分识别参数。当前按 QVGA 320x240 画面配置。
+#define BACKGROUND_START_DELAY_MS               10000 // 上电后等待空场景稳定的时间，单位：ms
+#define BACKGROUND_WARMUP_FRAMES                20    // 等待结束后丢弃的相机稳定帧数
+#define BACKGROUND_CAPTURE_FRAMES               8     // 用于平均生成空场景背景的帧数
+#define DETECTION_ROI_X                         20    // 识别区域左上角 X 坐标
+#define DETECTION_ROI_Y                         60    // 识别区域左上角 Y 坐标
+#define DETECTION_ROI_WIDTH                     280   // 识别区域宽度，单位：像素
+#define DETECTION_ROI_HEIGHT                    120   // 识别区域高度，单位：像素
+#define DIFFERENCE_CIRCLE_SCAN_STEP             2     // 差分扫描步长
+#define DIFFERENCE_CIRCLE_EDGE_MARGIN           8     // 画面安全边缘宽度，单位：像素
+#define DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD      35    // 补偿后比背景更亮时的最小亮度差
+#define DIFFERENCE_CIRCLE_DARK_THRESHOLD        15    // 补偿后比背景更暗时的最小亮度差
+#define DIFFERENCE_CIRCLE_MIN_AREA              40    // 有效圆形候选的最小估算面积，单位：像素
+#define DIFFERENCE_CIRCLE_MIN_FILL_PERCENT      35    // 候选区域在外接框中的最小填充率，单位：%
+#define DIFFERENCE_CIRCLE_LOST_COUNT            3     // 连续丢失多少个检测周期后判定目标离开
+#define DETECTION_LOG_INTERVAL_MS               500   // 连续识别时坐标日志的最小输出间隔，单位：ms
+#define STATUS_BANNER_DURATION_MS               3000  // 背景采集完成后 START 提示的显示时间，单位：ms
+
 #ifdef __cplusplus
 extern "C"
 {

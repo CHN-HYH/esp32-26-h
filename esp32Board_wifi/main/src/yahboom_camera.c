@@ -322,6 +322,10 @@ static void detect_difference_circle(camera_fb_t *frame)
     static uint8_t detect_frame_count = 0;
     static bool invalid_roi_reported = false;
     static TickType_t last_detection_log_tick = 0;
+    static bool tracked_position_valid = false;
+    static int tracked_center_x = 0;
+    static int tracked_center_y = 0;
+    static uint8_t tracking_missing_count = 0;
     int roi_left;
     int roi_top;
     int roi_right;
@@ -404,7 +408,7 @@ static void detect_difference_circle(camera_fb_t *frame)
         }
     }
 
-    bool circle_found = false;
+    bool candidate_found = false;
     uint32_t best_area = 0;
     int best_min_x = 0;
     int best_min_y = 0;
@@ -485,8 +489,43 @@ static void detect_difference_circle(camera_fb_t *frame)
             best_max_y = max_y;
             best_center_x = sum_x / component_count;
             best_center_y = sum_y / component_count;
-            circle_found = true;
+            candidate_found = true;
         }
+    }
+
+    bool circle_found = false;
+    if (candidate_found)
+    {
+        int delta_x = best_center_x - tracked_center_x;
+        int delta_y = best_center_y - tracked_center_y;
+        int distance_squared = delta_x * delta_x + delta_y * delta_y;
+        int maximum_jump_squared = DETECTION_TRACK_MAX_JUMP_PIXELS * DETECTION_TRACK_MAX_JUMP_PIXELS;
+
+        if (!tracked_position_valid || distance_squared <= maximum_jump_squared)
+        {
+            circle_found = true;
+            tracked_position_valid = true;
+            tracked_center_x = best_center_x;
+            tracked_center_y = best_center_y;
+            tracking_missing_count = 0;
+        }
+        else
+        {
+            TickType_t now = xTaskGetTickCount();
+            if (last_detection_log_tick == 0 ||
+                now - last_detection_log_tick >= pdMS_TO_TICKS(DETECTION_LOG_INTERVAL_MS))
+            {
+                last_detection_log_tick = now;
+                ESP_LOGI(TAG, "DIFF_CIRCLE_JUMP_REJECT x=%d y=%d previous_x=%d previous_y=%d",
+                         best_center_x, best_center_y, tracked_center_x, tracked_center_y);
+            }
+        }
+    }
+
+    if (!circle_found && ++tracking_missing_count >= DIFFERENCE_CIRCLE_LOST_COUNT)
+    {
+        tracked_position_valid = false;
+        tracking_missing_count = 0;
     }
 
     if (circle_found)

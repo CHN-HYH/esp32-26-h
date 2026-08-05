@@ -29,9 +29,6 @@ static bool background_delay_started = false;
 static uint8_t background_warmup_count = 0;
 static uint8_t background_capture_count = 0;
 static bool background_ready = false;
-static uint8_t *difference_mask = NULL;
-static uint16_t *difference_queue = NULL;
-static size_t difference_mask_capacity = 0;
 static uint16_t light_difference_histogram[LIGHT_DIFFERENCE_HISTOGRAM_SIZE];
 
 static void draw_yuv422_pixel(camera_fb_t *frame, int x, int y, const yuv422_color_t *color)
@@ -47,21 +44,16 @@ static void draw_yuv422_pixel(camera_fb_t *frame, int x, int y, const yuv422_col
     frame->buf[pair_offset + 3] = color->cr;
 }
 
-static void draw_detection_marker(camera_fb_t *frame, int min_x, int min_y, int max_x, int max_y,
-                                  int center_x, int center_y)
+static void draw_detection_x_marker(camera_fb_t *frame, int left_x, int right_x,
+                                    int center_x, int roi_top, int roi_bottom)
 {
-    for (int x = min_x; x <= max_x; x++)
+    for (int y = roi_top; y < roi_bottom; y++)
     {
-        draw_yuv422_pixel(frame, x, min_y, &kDetectionBoxColor);
-        draw_yuv422_pixel(frame, x, max_y, &kDetectionBoxColor);
+        draw_yuv422_pixel(frame, left_x, y, &kDetectionBoxColor);
+        draw_yuv422_pixel(frame, right_x, y, &kDetectionBoxColor);
     }
 
-    for (int y = min_y; y <= max_y; y++)
-    {
-        draw_yuv422_pixel(frame, min_x, y, &kDetectionBoxColor);
-        draw_yuv422_pixel(frame, max_x, y, &kDetectionBoxColor);
-    }
-
+    const int center_y = (roi_top + roi_bottom) / 2;
     for (int offset = -kDetectionCrossRadius; offset <= kDetectionCrossRadius; offset++)
     {
         draw_yuv422_pixel(frame, center_x + offset, center_y, &kDetectionCrossColor);
@@ -71,10 +63,10 @@ static void draw_detection_marker(camera_fb_t *frame, int min_x, int min_y, int 
 
 static bool get_detection_roi(const camera_fb_t *frame, int *left, int *top, int *right, int *bottom)
 {
-    const int minimum_x = DIFFERENCE_CIRCLE_EDGE_MARGIN;
-    const int minimum_y = DIFFERENCE_CIRCLE_EDGE_MARGIN;
-    const int maximum_x = frame->width - DIFFERENCE_CIRCLE_EDGE_MARGIN;
-    const int maximum_y = frame->height - DIFFERENCE_CIRCLE_EDGE_MARGIN;
+    const int minimum_x = DETECTION_EDGE_MARGIN;
+    const int minimum_y = DETECTION_EDGE_MARGIN;
+    const int maximum_x = frame->width - DETECTION_EDGE_MARGIN;
+    const int maximum_y = frame->height - DETECTION_EDGE_MARGIN;
 
     if (maximum_x <= minimum_x || maximum_y <= minimum_y)
         return false;
@@ -186,28 +178,28 @@ static bool capture_background(const camera_fb_t *frame)
     return background_ready;
 }
 
-static void update_circle_detection_state(bool circle_found)
+static void update_x_detection_state(bool target_found)
 {
-    static bool circle_was_found = false;
+    static bool target_was_found = false;
     static uint8_t missing_count = 0;
 
-    if (circle_found)
+    if (target_found)
     {
-        if (!circle_was_found)
-            ESP_LOGI(TAG, "DIFF_CIRCLE_FOUND");
-        circle_was_found = true;
+        if (!target_was_found)
+            ESP_LOGI(TAG, "DIFF_X_FOUND");
+        target_was_found = true;
         missing_count = 0;
         return;
     }
 
-    if (!circle_was_found)
+    if (!target_was_found)
         return;
 
-    if (++missing_count >= DIFFERENCE_CIRCLE_LOST_COUNT)
+    if (++missing_count >= DETECTION_LOST_COUNT)
     {
-        circle_was_found = false;
+        target_was_found = false;
         missing_count = 0;
-        ESP_LOGI(TAG, "DIFF_CIRCLE_LOST");
+        ESP_LOGI(TAG, "DIFF_X_LOST");
     }
 }
 
@@ -218,9 +210,9 @@ static int calculate_roi_light_offset(const camera_fb_t *frame, int left, int to
 
     memset(light_difference_histogram, 0, sizeof(light_difference_histogram));
 
-    for (int y = top; y < bottom; y += DIFFERENCE_CIRCLE_SCAN_STEP)
+    for (int y = top; y < bottom; y += DETECTION_SCAN_STEP)
     {
-        for (int x = left; x < right; x += DIFFERENCE_CIRCLE_SCAN_STEP)
+        for (int x = left; x < right; x += DETECTION_SCAN_STEP)
         {
             size_t pixel_index = y * frame->width + x;
             int difference = (int)frame->buf[pixel_index * 2] - background_y[pixel_index];
@@ -243,14 +235,13 @@ static int calculate_roi_light_offset(const camera_fb_t *frame, int left, int to
     return 0;
 }
 
-static void detect_difference_circle(camera_fb_t *frame)
+static void detect_x_projection(camera_fb_t *frame)
 {
     static uint8_t detect_frame_count = 0;
     static bool invalid_roi_reported = false;
     static TickType_t last_detection_log_tick = 0;
     static bool tracked_position_valid = false;
     static int tracked_center_x = 0;
-    static int tracked_center_y = 0;
     static uint8_t tracking_missing_count = 0;
     int roi_left;
     int roi_top;
@@ -260,21 +251,17 @@ static void detect_difference_circle(camera_fb_t *frame)
     {
         if (!invalid_roi_reported)
         {
-            ESP_LOGE(TAG, "DIFF_CIRCLE: invalid detection ROI");
+            ESP_LOGE(TAG, "DIFF_X: invalid detection ROI");
             invalid_roi_reported = true;
         }
-        update_circle_detection_state(false);
+        update_x_detection_state(false);
         yahboom_overlay_draw_status(frame);
         return;
     }
     invalid_roi_reported = false;
 
-    const int sample_width = (roi_right - roi_left +
-                              DIFFERENCE_CIRCLE_SCAN_STEP - 1) /
-                             DIFFERENCE_CIRCLE_SCAN_STEP;
-    const int sample_height = (roi_bottom - roi_top +
-                               DIFFERENCE_CIRCLE_SCAN_STEP - 1) /
-                              DIFFERENCE_CIRCLE_SCAN_STEP;
+    const int sample_width = (roi_right - roi_left + DETECTION_SCAN_STEP - 1) / DETECTION_SCAN_STEP;
+    const int sample_height = (roi_bottom - roi_top + DETECTION_SCAN_STEP - 1) / DETECTION_SCAN_STEP;
     const size_t sample_count = (size_t)sample_width * sample_height;
 
     if (!capture_background(frame))
@@ -284,7 +271,7 @@ static void detect_difference_circle(camera_fb_t *frame)
         return;
     }
 
-    // 每两帧检测一次，避免本次可行性测试影响当前图传帧率。
+    // 保留当前每两帧检测一次的节奏，避免识别再次挤占图传。
     if (++detect_frame_count < 2)
     {
         draw_detection_roi(frame);
@@ -293,47 +280,27 @@ static void detect_difference_circle(camera_fb_t *frame)
     }
     detect_frame_count = 0;
 
-    // 钢珠只占 ROI 的小部分，亮度差的中值可近似表示整帧光照偏移。
     const int light_offset = calculate_roi_light_offset(frame, roi_left, roi_top, roi_right, roi_bottom);
-
-    if (difference_mask_capacity < sample_count)
-    {
-        uint8_t *new_mask = (uint8_t *)heap_caps_malloc(sample_count, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        uint16_t *new_queue = (uint16_t *)heap_caps_malloc(sample_count * sizeof(uint16_t),
-                                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (new_mask == NULL || new_queue == NULL)
-        {
-            if (new_mask != NULL)
-                heap_caps_free(new_mask);
-            if (new_queue != NULL)
-                heap_caps_free(new_queue);
-            ESP_LOGE(TAG, "DIFF_CIRCLE: component buffer allocation failed");
-            return;
-        }
-        if (difference_mask != NULL)
-            heap_caps_free(difference_mask);
-        if (difference_queue != NULL)
-            heap_caps_free(difference_queue);
-        difference_mask = new_mask;
-        difference_queue = new_queue;
-        difference_mask_capacity = sample_count;
-    }
+    uint16_t x_projection[sample_width];
+    memset(x_projection, 0, sizeof(x_projection));
 
     size_t foreground_sample_count = 0;
     for (int sample_y = 0; sample_y < sample_height; sample_y++)
     {
-        int y = roi_top + sample_y * DIFFERENCE_CIRCLE_SCAN_STEP;
+        int y = roi_top + sample_y * DETECTION_SCAN_STEP;
         for (int sample_x = 0; sample_x < sample_width; sample_x++)
         {
-            int x = roi_left + sample_x * DIFFERENCE_CIRCLE_SCAN_STEP;
+            int x = roi_left + sample_x * DETECTION_SCAN_STEP;
             size_t pixel_index = y * frame->width + x;
             int signed_difference = (int)frame->buf[pixel_index * 2] - background_y[pixel_index] - light_offset;
             int difference = signed_difference < 0 ? -signed_difference : signed_difference;
-            bool is_foreground = difference > DIFFERENCE_CIRCLE_BRIGHT_THRESHOLD ||
-                                 signed_difference < -DIFFERENCE_CIRCLE_DARK_THRESHOLD;
-            difference_mask[sample_y * sample_width + sample_x] = is_foreground ? 1 : 0;
+            bool is_foreground = difference > DETECTION_BRIGHT_THRESHOLD ||
+                                 signed_difference < -DETECTION_DARK_THRESHOLD;
             if (is_foreground)
+            {
+                x_projection[sample_x]++;
                 foreground_sample_count++;
+            }
         }
     }
 
@@ -349,116 +316,76 @@ static void detect_difference_circle(camera_fb_t *frame)
                      (unsigned)foreground_sample_count, (unsigned)sample_count, light_offset);
         }
 
-        if (++tracking_missing_count >= DIFFERENCE_CIRCLE_LOST_COUNT)
+        if (++tracking_missing_count >= DETECTION_LOST_COUNT)
         {
             tracked_position_valid = false;
             tracking_missing_count = 0;
         }
-        update_circle_detection_state(false);
+        update_x_detection_state(false);
         draw_detection_roi(frame);
         yahboom_overlay_draw_status(frame);
         return;
     }
 
     bool candidate_found = false;
-    uint32_t best_area = 0;
-    int best_min_x = 0;
-    int best_min_y = 0;
-    int best_max_x = 0;
-    int best_max_y = 0;
-    int best_center_x = 0;
-    int best_center_y = 0;
+    uint32_t best_samples = 0;
+    uint32_t best_weighted_x = 0;
+    int best_start_x = 0;
+    int best_end_x = 0;
+    int candidate_start_x = -1;
+    uint32_t candidate_samples = 0;
+    uint32_t candidate_weighted_x = 0;
 
-    for (int start_y = 0; start_y < sample_height; start_y++)
+    // 连续有效列构成一个候选目标，按前景采样点总数选取最强候选。
+    for (int sample_x = 0; sample_x <= sample_width; sample_x++)
     {
-        for (int start_x = 0; start_x < sample_width; start_x++)
+        bool column_is_active = sample_x < sample_width &&
+                                x_projection[sample_x] >= DETECTION_X_MIN_COLUMN_SAMPLES;
+        if (column_is_active)
         {
-            size_t start_index = start_y * sample_width + start_x;
-            if (difference_mask[start_index] == 0)
-                continue;
-
-            uint16_t queue_size = 0;
-            uint32_t component_count = 0;
-            uint32_t sum_x = 0;
-            uint32_t sum_y = 0;
-            int min_x = frame->width;
-            int min_y = frame->height;
-            int max_x = -1;
-            int max_y = -1;
-            difference_queue[queue_size++] = (uint16_t)start_index;
-            difference_mask[start_index] = 2;
-
-            while (queue_size > 0)
+            if (candidate_start_x < 0)
             {
-                uint16_t current_index = difference_queue[--queue_size];
-                int current_x = current_index % sample_width;
-                int current_y = current_index / sample_width;
-                int pixel_x = roi_left + current_x * DIFFERENCE_CIRCLE_SCAN_STEP;
-                int pixel_y = roi_top + current_y * DIFFERENCE_CIRCLE_SCAN_STEP;
-                component_count++;
-                sum_x += pixel_x;
-                sum_y += pixel_y;
-                if (pixel_x < min_x) min_x = pixel_x;
-                if (pixel_x > max_x) max_x = pixel_x;
-                if (pixel_y < min_y) min_y = pixel_y;
-                if (pixel_y > max_y) max_y = pixel_y;
-
-                const int neighbor_x[8] = {current_x - 1, current_x + 1, current_x, current_x,
-                                           current_x - 1, current_x + 1, current_x - 1, current_x + 1};
-                const int neighbor_y[8] = {current_y, current_y, current_y - 1, current_y + 1,
-                                           current_y - 1, current_y - 1, current_y + 1, current_y + 1};
-                for (int neighbor = 0; neighbor < 8; neighbor++)
-                {
-                    if (neighbor_x[neighbor] < 0 || neighbor_x[neighbor] >= sample_width ||
-                        neighbor_y[neighbor] < 0 || neighbor_y[neighbor] >= sample_height)
-                        continue;
-                    size_t neighbor_index = neighbor_y[neighbor] * sample_width + neighbor_x[neighbor];
-                    if (difference_mask[neighbor_index] == 1 && queue_size < sample_count)
-                    {
-                        difference_mask[neighbor_index] = 2;
-                        difference_queue[queue_size++] = (uint16_t)neighbor_index;
-                    }
-                }
+                candidate_start_x = sample_x;
+                candidate_samples = 0;
+                candidate_weighted_x = 0;
             }
+            int pixel_x = roi_left + sample_x * DETECTION_SCAN_STEP;
+            candidate_samples += x_projection[sample_x];
+            candidate_weighted_x += pixel_x * x_projection[sample_x];
+            continue;
+        }
 
-            uint32_t estimated_area = component_count * DIFFERENCE_CIRCLE_SCAN_STEP * DIFFERENCE_CIRCLE_SCAN_STEP;
-            if (estimated_area < DIFFERENCE_CIRCLE_MIN_AREA)
-                continue;
+        if (candidate_start_x < 0)
+            continue;
 
-            int width = max_x - min_x + DIFFERENCE_CIRCLE_SCAN_STEP;
-            int height = max_y - min_y + DIFFERENCE_CIRCLE_SCAN_STEP;
-            uint32_t box_area = width * height;
-            uint32_t fill_percent = estimated_area * 100 / box_area;
-            if (width * 100 < height * 55 || width * 100 > height * 145 ||
-                fill_percent < DIFFERENCE_CIRCLE_MIN_FILL_PERCENT ||
-                estimated_area <= best_area)
-                continue;
-
-            best_area = estimated_area;
-            best_min_x = min_x;
-            best_min_y = min_y;
-            best_max_x = max_x;
-            best_max_y = max_y;
-            best_center_x = sum_x / component_count;
-            best_center_y = sum_y / component_count;
+        int candidate_width = sample_x - candidate_start_x;
+        if (candidate_width >= DETECTION_X_MIN_WIDTH &&
+            candidate_samples >= DETECTION_X_MIN_SAMPLES &&
+            candidate_samples > best_samples)
+        {
+            best_samples = candidate_samples;
+            best_weighted_x = candidate_weighted_x;
+            best_start_x = candidate_start_x;
+            best_end_x = sample_x;
             candidate_found = true;
         }
+        candidate_start_x = -1;
     }
 
-    bool circle_found = false;
+    bool target_found = false;
+    int best_center_x = 0;
     if (candidate_found)
     {
-        int delta_x = best_center_x - tracked_center_x;
-        int delta_y = best_center_y - tracked_center_y;
-        int distance_squared = delta_x * delta_x + delta_y * delta_y;
-        int maximum_jump_squared = DETECTION_TRACK_MAX_JUMP_PIXELS * DETECTION_TRACK_MAX_JUMP_PIXELS;
+        best_center_x = best_weighted_x / best_samples;
+        int jump_x = best_center_x - tracked_center_x;
+        if (jump_x < 0)
+            jump_x = -jump_x;
 
-        if (!tracked_position_valid || distance_squared <= maximum_jump_squared)
+        if (!tracked_position_valid || jump_x <= DETECTION_TRACK_MAX_JUMP_PIXELS)
         {
-            circle_found = true;
+            target_found = true;
             tracked_position_valid = true;
             tracked_center_x = best_center_x;
-            tracked_center_y = best_center_y;
             tracking_missing_count = 0;
         }
         else
@@ -468,40 +395,35 @@ static void detect_difference_circle(camera_fb_t *frame)
                 now - last_detection_log_tick >= pdMS_TO_TICKS(DETECTION_LOG_INTERVAL_MS))
             {
                 last_detection_log_tick = now;
-                ESP_LOGI(TAG, "DIFF_CIRCLE_JUMP_REJECT x=%d y=%d previous_x=%d previous_y=%d",
-                         best_center_x, best_center_y, tracked_center_x, tracked_center_y);
+                ESP_LOGI(TAG, "DIFF_X_JUMP_REJECT x=%d previous_x=%d", best_center_x, tracked_center_x);
             }
         }
     }
 
-    if (!circle_found && ++tracking_missing_count >= DIFFERENCE_CIRCLE_LOST_COUNT)
+    if (!target_found && ++tracking_missing_count >= DETECTION_LOST_COUNT)
     {
         tracked_position_valid = false;
         tracking_missing_count = 0;
     }
 
-    if (circle_found)
+    if (target_found)
     {
-        int width = best_max_x - best_min_x + DIFFERENCE_CIRCLE_SCAN_STEP;
-        int height = best_max_y - best_min_y + DIFFERENCE_CIRCLE_SCAN_STEP;
-        uint32_t box_area = width * height;
-        uint32_t fill_percent = best_area * 100 / box_area;
-        draw_detection_marker(frame, best_min_x, best_min_y,
-                              best_max_x + DIFFERENCE_CIRCLE_SCAN_STEP - 1,
-                              best_max_y + DIFFERENCE_CIRCLE_SCAN_STEP - 1,
-                              best_center_x, best_center_y);
+        int left_x = roi_left + best_start_x * DETECTION_SCAN_STEP;
+        int right_x = roi_left + (best_end_x - 1) * DETECTION_SCAN_STEP;
+        int width = (best_end_x - best_start_x) * DETECTION_SCAN_STEP;
+        draw_detection_x_marker(frame, left_x, right_x, best_center_x, roi_top, roi_bottom);
+
         TickType_t now = xTaskGetTickCount();
         if (last_detection_log_tick == 0 ||
             now - last_detection_log_tick >= pdMS_TO_TICKS(DETECTION_LOG_INTERVAL_MS))
         {
             last_detection_log_tick = now;
-            ESP_LOGI(TAG, "DIFF_CIRCLE x=%d y=%d w=%d h=%d area=%lu fill=%lu%% offset=%d",
-                     best_center_x, best_center_y, width, height,
-                     (unsigned long)best_area, (unsigned long)fill_percent, light_offset);
+            ESP_LOGI(TAG, "DIFF_X x=%d width=%d samples=%u offset=%d",
+                     best_center_x, width, (unsigned)best_samples, light_offset);
         }
     }
 
-    update_circle_detection_state(circle_found);
+    update_x_detection_state(target_found);
     draw_detection_roi(frame);
     yahboom_overlay_draw_status(frame);
 }
@@ -514,7 +436,7 @@ static void task_process_handler(void *arg)
         if (!frame)
             continue;
 
-        detect_difference_circle(frame);
+        detect_x_projection(frame);
         yahboom_overlay_draw_fps(frame);
 
         if (xQueueSend(xQueueFrameO, &frame, 0) == pdTRUE)

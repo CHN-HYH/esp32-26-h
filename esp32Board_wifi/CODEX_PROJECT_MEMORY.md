@@ -92,3 +92,10 @@
 - 已将 `WAIT`、`START`、FPS 的点阵字库、YUV422 绘制和显示计时从 `main/src/yahboom_camera.c` 拆分到 `main/src/yahboom_overlay.c`，对外声明位于 `main/include/yahboom_overlay.h`。
 - 相机文件只保留调用：背景等待开始时调用 `yahboom_overlay_show_wait()`，背景采集完成时调用 `yahboom_overlay_show_start()`，每帧调用 `yahboom_overlay_draw_status()` 与 `yahboom_overlay_draw_fps()`。ROI 边框、目标白框与红十字仍保留在相机文件，因为它们与识别坐标直接耦合。
 - `main/CMakeLists.txt` 已通过 `SRC_DIRS src` 自动包含新增 `.c` 文件，无需改动构建脚本。本次未执行编译、烧录或实机验证，由用户执行。
+
+## 2026-08-05 一维 X 投影识别
+
+- `main/src/yahboom_camera.c` 已由二维 8 邻域连通域改为一维 X 投影：对 ROI 内的每个差分前景采样点累加其所属 X 列的计数，再按连续有效列、候选总前景点数选择最强区间，并按前景点加权计算 X 中心。
+- 已删除 `difference_mask`、`difference_queue`、8 邻域 BFS、二维面积/外接框比例/填充率筛选，以及对应的 `DIFFERENCE_CIRCLE_*` 宏。新增 `DETECTION_X_MIN_COLUMN_SAMPLES=2`、`DETECTION_X_MIN_WIDTH=4`、`DETECTION_X_MIN_SAMPLES=10`，均以采样点为单位；后续应根据钢珠实机画面调整。
+- 保留背景差分、ROI、ROI 亮度中值补偿、大面积光照扰动拒绝和仅按 X 坐标判断的跳变过滤。当前用户设置保持为 ROI `x=0, y=95, width=320, height=50`、扫描步长 2、每两帧检测一次。
+- 成功日志改为 `DIFF_X x=<...> width=<...> samples=<...> offset=<...>`，状态日志为 `DIFF_X_FOUND`、`DIFF_X_LOST`、`DIFF_X_JUMP_REJECT`。图传中显示候选 X 区间的两条白色竖线与 ROI 垂直中心的红色十字。本次未执行编译、烧录或实机验证，由用户执行。

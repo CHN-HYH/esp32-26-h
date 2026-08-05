@@ -1,7 +1,7 @@
 #include "yahboom_camera.h"
+#include "yahboom_overlay.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
-#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "yahboom_camera";
@@ -17,15 +17,7 @@ typedef struct
 static const yuv422_color_t kDetectionBoxColor = {235, 128, 128};
 static const yuv422_color_t kDetectionCrossColor = {76, 85, 255};
 static const yuv422_color_t kDetectionRoiColor = {150, 255, 100};
-static const yuv422_color_t kStatusBannerColor = {16, 128, 128};
-static const yuv422_color_t kStatusTextColor = {235, 128, 128};
 static const int kDetectionCrossRadius = 10;
-static const char kFpsCharacters[] = "FPS:0123456789";
-static const uint16_t kFpsGlyphs[] = {
-    0x79A4, 0x6BA4, 0x388E, 0x0410,
-    0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9,
-    0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF,
-};
 enum { LIGHT_DIFFERENCE_HISTOGRAM_SIZE = 511 };
 
 static uint8_t *background_y = NULL;
@@ -33,7 +25,6 @@ static size_t background_pixel_count = 0;
 static uint16_t background_width = 0;
 static uint16_t background_height = 0;
 static TickType_t background_delay_start_tick = 0;
-static TickType_t recognition_start_tick = 0;
 static bool background_delay_started = false;
 static uint8_t background_warmup_count = 0;
 static uint8_t background_capture_count = 0;
@@ -123,143 +114,6 @@ static void draw_detection_roi(camera_fb_t *frame)
     }
 }
 
-static void draw_fps_overlay(camera_fb_t *frame)
-{
-    static TickType_t fps_start_tick = 0;
-    static uint16_t fps_frame_count = 0;
-    static uint16_t displayed_fps = 0;
-    TickType_t now = xTaskGetTickCount();
-
-    if (fps_start_tick == 0)
-        fps_start_tick = now;
-    fps_frame_count++;
-
-    TickType_t elapsed_ticks = now - fps_start_tick;
-    if (elapsed_ticks >= pdMS_TO_TICKS(1000))
-    {
-        uint32_t elapsed_ms = pdTICKS_TO_MS(elapsed_ticks);
-        displayed_fps = elapsed_ms == 0 ? 0 : fps_frame_count * 1000 / elapsed_ms;
-        fps_frame_count = 0;
-        fps_start_tick = now;
-    }
-    if (displayed_fps > 999)
-        displayed_fps = 999;
-
-    char text[10];
-    snprintf(text, sizeof(text), "FPS:%u", (unsigned)displayed_fps);
-    const int scale = frame->width >= 200 ? 2 : 1;
-    const int glyph_width = 3 * scale;
-    const int glyph_height = 5 * scale;
-    const int character_count = strlen(text);
-    const int text_width = character_count * glyph_width + (character_count - 1) * scale;
-    const int origin_x = (frame->width - text_width) / 2;
-    const int origin_y = scale * 3;
-
-    for (int y = origin_y - scale; y < origin_y + glyph_height + scale; y++)
-    {
-        for (int x = origin_x - scale; x < origin_x + text_width + scale; x++)
-            draw_yuv422_pixel(frame, x, y, &kStatusBannerColor);
-    }
-
-    for (int character = 0; character < character_count; character++)
-    {
-        const char *glyph_character = strchr(kFpsCharacters, text[character]);
-        if (glyph_character == NULL)
-            continue;
-
-        uint16_t glyph = kFpsGlyphs[glyph_character - kFpsCharacters];
-        int glyph_x = origin_x + character * (glyph_width + scale);
-        for (int row = 0; row < 5; row++)
-        {
-            for (int column = 0; column < 3; column++)
-            {
-                if ((glyph & (1U << (14 - row * 3 - column))) == 0)
-                    continue;
-
-                for (int offset_y = 0; offset_y < scale; offset_y++)
-                {
-                    for (int offset_x = 0; offset_x < scale; offset_x++)
-                        draw_yuv422_pixel(frame, glyph_x + column * scale + offset_x,
-                                          origin_y + row * scale + offset_y, &kStatusTextColor);
-                }
-            }
-        }
-    }
-}
-
-static void draw_status_banner(camera_fb_t *frame)
-{
-    // 5x7 点阵字体。
-    static const uint8_t start_font[5][7] = {
-        {0x0f, 0x10, 0x0e, 0x01, 0x1e, 0x10, 0x0f},
-        {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
-        {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11},
-        {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11},
-        {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
-    };
-    static const uint8_t wait_font[4][7] = {
-        {0x11, 0x11, 0x11, 0x11, 0x15, 0x15, 0x0a},
-        {0x0e, 0x11, 0x11, 0x11, 0x1f, 0x11, 0x11},
-        {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1f},
-        {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
-    };
-    const uint8_t (*font)[7] = NULL;
-    int character_count = 0;
-    const int scale = frame->width >= 200 ? 3 : 2;
-    const int origin_x = 8;
-    const int origin_y = 8;
-    const int glyph_width = 5 * scale;
-    const int glyph_height = 7 * scale;
-
-    if (background_delay_started && !background_ready &&
-        xTaskGetTickCount() - background_delay_start_tick < pdMS_TO_TICKS(BACKGROUND_START_DELAY_MS))
-    {
-        font = wait_font;
-        character_count = 4;
-    }
-    else if (recognition_start_tick != 0 &&
-             xTaskGetTickCount() - recognition_start_tick < pdMS_TO_TICKS(STATUS_BANNER_DURATION_MS))
-    {
-        font = start_font;
-        character_count = 5;
-    }
-    else
-    {
-        return;
-    }
-
-    const int text_width = glyph_width * character_count + scale * (character_count - 1);
-    const int banner_width = text_width + scale * 4;
-    const int banner_height = glyph_height + scale * 4;
-
-    for (int y = origin_y; y < origin_y + banner_height; y++)
-    {
-        for (int x = origin_x; x < origin_x + banner_width; x++)
-            draw_yuv422_pixel(frame, x, y, &kStatusBannerColor);
-    }
-
-    for (int character = 0; character < character_count; character++)
-    {
-        int glyph_x = origin_x + scale * 2 + character * (glyph_width + scale);
-        int glyph_y = origin_y + scale * 2;
-        for (int row = 0; row < 7; row++)
-        {
-            for (int column = 0; column < 5; column++)
-            {
-                if ((font[character][row] & (1 << (4 - column))) == 0)
-                    continue;
-
-                for (int offset_y = 0; offset_y < scale; offset_y++)
-                {
-                    for (int offset_x = 0; offset_x < scale; offset_x++)
-                        draw_yuv422_pixel(frame, glyph_x + column * scale + offset_x,
-                                          glyph_y + row * scale + offset_y, &kStatusTextColor);
-                }
-            }
-        }
-    }
-}
-
 static bool capture_background(const camera_fb_t *frame)
 {
     size_t pixel_count = frame->width * frame->height;
@@ -274,6 +128,7 @@ static bool capture_background(const camera_fb_t *frame)
     {
         background_delay_started = true;
         background_delay_start_tick = xTaskGetTickCount();
+        yahboom_overlay_show_wait(BACKGROUND_START_DELAY_MS);
         ESP_LOGI(TAG, "BACKGROUND: preview active, waiting %d ms before capture", BACKGROUND_START_DELAY_MS);
         return false;
     }
@@ -323,7 +178,7 @@ static bool capture_background(const camera_fb_t *frame)
         if (background_capture_count == BACKGROUND_CAPTURE_FRAMES)
         {
             background_ready = true;
-            recognition_start_tick = xTaskGetTickCount();
+            yahboom_overlay_show_start(STATUS_BANNER_DURATION_MS);
             ESP_LOGI(TAG, "BACKGROUND_READY: start recognition");
         }
     }
@@ -409,7 +264,7 @@ static void detect_difference_circle(camera_fb_t *frame)
             invalid_roi_reported = true;
         }
         update_circle_detection_state(false);
-        draw_status_banner(frame);
+        yahboom_overlay_draw_status(frame);
         return;
     }
     invalid_roi_reported = false;
@@ -425,15 +280,15 @@ static void detect_difference_circle(camera_fb_t *frame)
     if (!capture_background(frame))
     {
         draw_detection_roi(frame);
-        draw_status_banner(frame);
+        yahboom_overlay_draw_status(frame);
         return;
     }
 
-    // 每三帧检测一次，避免本次可行性测试影响当前图传帧率。
-    if (++detect_frame_count < 3)
+    // 每两帧检测一次，避免本次可行性测试影响当前图传帧率。
+    if (++detect_frame_count < 2)
     {
         draw_detection_roi(frame);
-        draw_status_banner(frame);
+        yahboom_overlay_draw_status(frame);
         return;
     }
     detect_frame_count = 0;
@@ -501,7 +356,7 @@ static void detect_difference_circle(camera_fb_t *frame)
         }
         update_circle_detection_state(false);
         draw_detection_roi(frame);
-        draw_status_banner(frame);
+        yahboom_overlay_draw_status(frame);
         return;
     }
 
@@ -648,7 +503,7 @@ static void detect_difference_circle(camera_fb_t *frame)
 
     update_circle_detection_state(circle_found);
     draw_detection_roi(frame);
-    draw_status_banner(frame);
+    yahboom_overlay_draw_status(frame);
 }
 
 static void task_process_handler(void *arg)
@@ -660,7 +515,7 @@ static void task_process_handler(void *arg)
             continue;
 
         detect_difference_circle(frame);
-        draw_fps_overlay(frame);
+        yahboom_overlay_draw_fps(frame);
 
         if (xQueueSend(xQueueFrameO, &frame, 0) == pdTRUE)
             continue;

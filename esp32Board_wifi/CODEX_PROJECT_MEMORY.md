@@ -84,5 +84,11 @@
 
 ## 2026-08-04 帧率叠加
 
-- `main/src/yahboom_camera.c` 在每次完成识别处理后统计相机帧，按约 1 秒窗口更新并在图传画面右上角绘制 `FPS:<整数>`。该值代表 ESP32 相机帧进入识别任务的处理帧率，可用于评估算法对采集链路的影响；它不代表浏览器最终接收帧率或网络吞吐。
+- `main/src/yahboom_camera.c` 在每次完成识别处理后统计相机帧，按约 1 秒窗口更新并在图传画面上方正中绘制 `FPS:<整数>`。该值代表 ESP32 相机帧进入识别任务的处理帧率，可用于评估算法对采集链路的影响；它不代表浏览器最终接收帧率或网络吞吐。
 - 叠加使用紧凑的 3x5 点阵，适配当前 `YUV422` 原始帧。公共 `fb_gfx_printf()` 不支持 `YUV422`，不可直接用于此工程。
+
+## 2026-08-05 图传文字叠加模块
+
+- 已将 `WAIT`、`START`、FPS 的点阵字库、YUV422 绘制和显示计时从 `main/src/yahboom_camera.c` 拆分到 `main/src/yahboom_overlay.c`，对外声明位于 `main/include/yahboom_overlay.h`。
+- 相机文件只保留调用：背景等待开始时调用 `yahboom_overlay_show_wait()`，背景采集完成时调用 `yahboom_overlay_show_start()`，每帧调用 `yahboom_overlay_draw_status()` 与 `yahboom_overlay_draw_fps()`。ROI 边框、目标白框与红十字仍保留在相机文件，因为它们与识别坐标直接耦合。
+- `main/CMakeLists.txt` 已通过 `SRC_DIRS src` 自动包含新增 `.c` 文件，无需改动构建脚本。本次未执行编译、烧录或实机验证，由用户执行。

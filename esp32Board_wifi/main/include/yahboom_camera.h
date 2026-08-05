@@ -217,30 +217,6 @@
 
 #define XCLK_FREQ_HZ 15000000  //GC2145不能调高
 
-// 钢珠背景差分识别参数。当前按 QVGA 320x240 画面配置。
-#define BACKGROUND_START_DELAY_MS               10000   // 上电后等待空场景稳定的时间，单位：ms
-#define BACKGROUND_WARMUP_FRAMES                20      // 等待结束后丢弃的相机稳定帧数
-#define BACKGROUND_CAPTURE_FRAMES               8       // 用于平均生成空场景背景的帧数
-#define DETECTION_ROI_X                         0       // 识别区域左上角 X 坐标
-#define DETECTION_ROI_Y                         95      // 识别区域左上角 Y 坐标
-#define DETECTION_ROI_WIDTH                     320     // 识别区域宽度，单位：像素
-#define DETECTION_ROI_HEIGHT                    50      // 识别区域高度，单位：像素
-#define DETECTION_SCAN_STEP                     2       // 差分扫描步长
-#define DETECTION_EDGE_MARGIN                   0       // 画面安全边缘宽度，单位：像素
-#define DETECTION_BRIGHT_THRESHOLD              35      // 补偿后比背景更亮时的最小亮度差
-#define DETECTION_DARK_THRESHOLD                15      // 补偿后比背景更暗时的最小亮度差
-#define DETECTION_MAX_FOREGROUND_PERCENT        25      // 前景超过 ROI 的该比例时，判定为光照或遮挡扰动
-#define DETECTION_X_MIN_COLUMN_SAMPLES          2       // 有效投影列的最少前景采样点数
-#define DETECTION_X_MIN_WIDTH                   4       // 有效投影区间的最少连续采样列数
-#define DETECTION_X_MIN_SAMPLES                 10      // 有效投影区间的最少前景采样点总数
-#define DETECTION_MARKER_HALF_WIDTH_PIXELS      12      // 红色十字到左右白色竖线的距离，单位：像素
-#define DETECTION_LOST_COUNT                    3       // 连续丢失多少个检测周期后判定目标离开
-#define DETECTION_TRACK_MAX_JUMP_PIXELS         30      // 相邻检测周期允许的最大坐标跳变距离，单位：像素
-#define DETECTION_REACQUIRE_CONFIRM_COUNT        2       // 远处单候选连续确认次数
-#define DETECTION_REACQUIRE_MAX_DRIFT_PIXELS    40       // 远处单候选相邻确认允许的最大 X 偏移，单位：像素
-#define DETECTION_LOG_INTERVAL_MS               500     // 连续识别时坐标日志的最小输出间隔，单位：ms
-#define STATUS_BANNER_DURATION_MS               3000    // 背景采集完成后 START 提示的显示时间，单位：ms
-
 #ifdef __cplusplus
 extern "C"
 {

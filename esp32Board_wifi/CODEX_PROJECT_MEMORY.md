@@ -125,5 +125,19 @@
 
 ## 2026-08-05 固定宽度标记
 
-- 当前图传的红色十字仍表示原始 X 投影重心；两条白色竖线不再表示候选前景区间边界，而是固定绘制于 `center_x +/- DETECTION_MARKER_HALF_WIDTH_PIXELS`。默认半宽为 `12 px`，可在 `main/include/yahboom_camera.h` 按钢珠实际像素直径调整。
+- 当前图传的红色十字仍表示原始 X 投影重心；两条白色竖线不再表示候选前景区间边界，而是固定绘制于 `center_x +/- DETECTION_MARKER_HALF_WIDTH_PIXELS`。默认半宽为 `12 px`，可在 `main/include/yahboom_detection.h` 按钢珠实际像素直径调整。
 - 识别候选宽度仍记录在 `DIFF_X width=<...>` 日志中，未因本次显示改动改变识别、跳变跟踪或帧率。
+
+## 2026-08-05 检测模块结构整理
+
+- 已新增 `main/include/yahboom_detection.h` 和 `main/src/yahboom_detection.c`，将背景采集、ROI 边框、YUV422 标记、一维 X 投影、候选筛选和坐标状态跟踪从 `yahboom_camera.c` 移出。
+- 检测参数、候选结构体、跟踪结构体和检测上下文统一放在 `yahboom_detection.h`；`yahboom_camera.c` 现在只负责摄像头初始化、取帧、检测模块调用、FPS 叠加和图传队列。
+- 对外接口只有 `yahboom_detection_init()` 和 `yahboom_detection_process()`，新源文件由 `main/CMakeLists.txt` 的 `SRC_DIRS src` 自动纳入构建。
+- 保持当前识别行为不变：QVGA/YUV422、背景差分、ROI 亮度中值补偿、每两帧检测一次、多候选近邻优先和远处单候选重捕获；未恢复曾导致 FPS 下降和卡死的速度预测/滤波方案。
+- 已删除模块化重构后遗留的两个未使用静态辅助函数；本次只做静态检查，未编译、烧录或实机验证，由用户执行。
+
+## 2026-08-05 检测计算量优化（待实机验证）
+
+- `main/src/yahboom_detection.c` 的 ROI 亮度中值补偿改为使用 `DETECTION_SCAN_STEP * 2` 的稀疏采样；目标 X 投影仍保持原来的步长 2，避免改变坐标采样精度。
+- `main/src/yahboom_detection.c` 和 `main/src/yahboom_overlay.c` 的 YUV422 单像素绘制辅助函数改为 `static inline`，减少每帧 ROI/FPS/目标标记叠加的函数调用开销。
+- 未修改多候选优先级、重捕获确认、阈值、ROI、分辨率和每两帧检测节奏。该优化尚未由用户编译、烧录和实机验证；需要重点观察 FPS、钢珠丢失率和光照变化下的亮度补偿稳定性。

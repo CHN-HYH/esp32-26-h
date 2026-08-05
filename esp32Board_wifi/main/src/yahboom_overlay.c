@@ -46,7 +46,7 @@ static overlay_status_t status = OVERLAY_STATUS_NONE;
 static TickType_t status_start_tick = 0;
 static TickType_t status_duration_ticks = 0;
 
-static void draw_yuv422_pixel(camera_fb_t *frame, int x, int y, const yuv422_color_t *color)
+static inline void draw_yuv422_pixel(camera_fb_t *frame, int x, int y, const yuv422_color_t *color)
 {
     if (x < 0 || x >= frame->width || y < 0 || y >= frame->height)
         return;

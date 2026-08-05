@@ -1,5 +1,12 @@
 {
     "files.associations": {
         "my_usart.h": "c"
+    },
+    "python.analysis.extraPaths": [
+        "C:\\Users\\Administrator\\.kendryte\\k230_canmv_stubs\\ccb5ce5bc04880294c1235494fe9ce4a4cde6a13"
+    ],
+    "python.analysis.stubPath": "C:\\Users\\Administrator\\.kendryte\\k230_canmv_pylance\\5c9bdeaf5eef38b3\\typings",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingModuleSource": "none"
     }
 }

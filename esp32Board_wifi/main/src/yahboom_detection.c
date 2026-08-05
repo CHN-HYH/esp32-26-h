@@ -5,6 +5,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/task.h"
+#include "yahboom_msp_uart.h"
 #include "yahboom_overlay.h"
 
 static const char *TAG = "yahboom_camera";
@@ -201,6 +202,15 @@ static void update_detection_state(yahboom_detection_context_t *context,
     }
 }
 
+static void send_msp_tracking_status(const yahboom_detection_context_t *context)
+{
+    const yahboom_detection_tracking_t *tracking = &context->tracking;
+    const bool valid = !context->invalid_roi_reported && tracking->position_valid &&
+                       tracking->missing_count == 0;
+    yahboom_msp_uart_send(valid, valid ? (uint16_t)tracking->center_x : 0,
+                          valid ? tracking->width : 0);
+}
+
 static int calculate_roi_light_offset(yahboom_detection_context_t *context,
                                       const camera_fb_t *frame, int left, int top,
                                       int right, int bottom)
@@ -254,6 +264,7 @@ static void detect_x_projection(yahboom_detection_context_t *context,
         }
         update_detection_state(context, false);
         yahboom_overlay_draw_status(frame);
+        send_msp_tracking_status(context);
         return;
     }
     context->invalid_roi_reported = false;
@@ -267,6 +278,7 @@ static void detect_x_projection(yahboom_detection_context_t *context,
     if (!capture_background(context, frame))
     {
         draw_detection_overlays(frame);
+        send_msp_tracking_status(context);
         return;
     }
 
@@ -274,6 +286,7 @@ static void detect_x_projection(yahboom_detection_context_t *context,
     if (++context->detect_frame_count < 2)
     {
         draw_detection_overlays(frame);
+        send_msp_tracking_status(context);
         return;
     }
     context->detect_frame_count = 0;
@@ -319,12 +332,14 @@ static void detect_x_projection(yahboom_detection_context_t *context,
         if (++context->tracking.missing_count >= DETECTION_LOST_COUNT)
         {
             context->tracking.position_valid = false;
+            context->tracking.width = 0;
             context->tracking.missing_count = 0;
         }
         context->tracking.reacquire_valid = false;
         context->tracking.reacquire_count = 0;
         update_detection_state(context, false);
         draw_detection_overlays(frame);
+        send_msp_tracking_status(context);
         return;
     }
 
@@ -391,6 +406,7 @@ static void detect_x_projection(yahboom_detection_context_t *context,
         selected = nearest;
         target_found = true;
         tracking->center_x = selected.center_x;
+        tracking->width = selected.end_x - selected.start_x + DETECTION_SCAN_STEP;
         tracking->missing_count = 0;
         tracking->reacquire_valid = false;
         tracking->reacquire_count = 0;
@@ -419,6 +435,7 @@ static void detect_x_projection(yahboom_detection_context_t *context,
             target_found = true;
             tracking->position_valid = true;
             tracking->center_x = selected.center_x;
+            tracking->width = selected.end_x - selected.start_x + DETECTION_SCAN_STEP;
             tracking->missing_count = 0;
             tracking->reacquire_valid = false;
             tracking->reacquire_count = 0;
@@ -445,6 +462,7 @@ static void detect_x_projection(yahboom_detection_context_t *context,
     if (!target_found && ++tracking->missing_count >= DETECTION_LOST_COUNT)
     {
         tracking->position_valid = false;
+        tracking->width = 0;
         tracking->missing_count = 0;
         tracking->reacquire_valid = false;
         tracking->reacquire_count = 0;
@@ -467,6 +485,7 @@ static void detect_x_projection(yahboom_detection_context_t *context,
 
     update_detection_state(context, target_found);
     draw_detection_overlays(frame);
+    send_msp_tracking_status(context);
 }
 
 void yahboom_detection_init(yahboom_detection_context_t *context)

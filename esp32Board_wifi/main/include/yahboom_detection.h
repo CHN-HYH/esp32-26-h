@@ -59,6 +59,7 @@ typedef struct
     bool position_valid;
     int center_x;
     uint8_t missing_count;
+    uint16_t width;
     bool reacquire_valid;
     int reacquire_center_x;
     uint8_t reacquire_count;

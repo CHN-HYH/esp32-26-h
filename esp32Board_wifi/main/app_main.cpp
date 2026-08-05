@@ -13,6 +13,7 @@
 #include "my_usart1_user.h"
 #include "my_user_iic.h"
 #include "mykey.h"
+#include "yahboom_msp_uart.h"
 #include <cstring>
 
 
@@ -37,6 +38,7 @@ extern "C" void app_main(void)
     xQueuemyvirtualKey = xQueueCreate(1, sizeof(int *));
 
     My_Uart1_user_Init(xQueuemyvirtualKey);//串口1初始化
+    yahboom_msp_uart_init();
 
     app_mywifi_main();
 

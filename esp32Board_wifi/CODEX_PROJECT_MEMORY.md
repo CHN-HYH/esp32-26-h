@@ -148,3 +148,20 @@
 - `PERF_CAMERA` 字段：`capture_avg/max` 为 `esp_camera_fb_get()` 耗时，`detect_avg/max` 为识别模块耗时，`overlay_avg/max` 为 FPS 叠加耗时，`queue_replace` 为图传队列满而丢弃旧帧的次数。
 - `PERF_STREAM` 字段：`wait_avg/max` 为等待输入帧耗时，`encode_avg/max` 为 JPEG 编码耗时，`send_avg/max` 为 HTTP 发送耗时，`fallback` 为退回通用 `frame2jpg()` 的次数。
 - 本次只增加诊断，不改变帧队列策略、识别结果或图像参数；未编译、烧录或实机验证，由用户执行。
+
+## 2026-08-05 ESP 到 MSPM0 UART 输出接入
+
+- 已确认 `C:/Espressif/frameworks/esp-idf-v5.1.2/111/main/uart_echo_example_main.c` 只是标准 UART 回显示例；当前图传工程已有 `main/src/my_usart1_user.c`，由 `My_Uart1_user_Init()` 安装 UART1，`Uart1_Send_Data()` 提供底层发送，GPIO 为 TX `36`、RX `35`、115200、8N1，因此不重复安装 UART 驱动。
+- 新增 `main/include/yahboom_msp_uart.h` 和 `main/src/yahboom_msp_uart.c`，独立负责 MSP 数据包组装、CRC8 和发送任务；通过长度为 1 的 FreeRTOS 队列覆盖旧包，只保留最新钢珠状态，摄像头任务不会等待串口发送。
+- 当前数据包为 8 字节 `AA 55 FLAGS SEQ X_L X_H WIDTH CRC8`，CRC8 多项式为 `0x07`，计算范围为前 7 个字节。`FLAGS bit0` 为 `valid`；无效包的 X 和 WIDTH 清零；X 限制在 `0~319`，WIDTH 限制在 `0~255`。
+- `yahboom_detection.c` 已在每个相机处理周期提交当前识别状态；背景未完成、ROI 非法、光照扰动或目标丢失时发送 `valid=0`，有效跟踪时发送中心 X 和候选宽度。当前尚未由用户编译、烧录、逻辑分析仪抓包或 MSPM0 实机联调。
+- 由于发送采用独立任务和最新包覆盖策略，协议本身预期不会明显降低图传 FPS；仍需通过 `PERF_CAMERA`、图传 FPS、UART 实际波形和 MSP 数据超时行为进行实测确认。
+
+## 2026-08-05 ESP 到 MSPM0 的钢珠坐标通信协议
+
+- 推荐 ESP 向 MSPM0 输出固定长度二进制帧：`AA 55 FLAGS SEQ X_L X_H WIDTH CRC8`，实际为 8 字节。`AA 55` 用于帧同步；`FLAGS` 至少包含 `valid` 位，用于区分 `x=0` 的真实左边位置和未识别；`SEQ` 为递增序号，便于 MSP 判断是否收到新帧；`X_L/X_H` 为钢珠中心 X 坐标，范围 `0~319`；`WIDTH` 为当前 X 投影候选宽度，可用于异常候选过滤；`CRC8` 用于校验帧内容。若要求 `WIDTH` 也能表示完整 `0~319` 范围，应改为 `WIDTH_L/WIDTH_H`，整帧变为 9 字节；当前钢珠候选宽度通常几十像素，1 字节足够。
+- 对水平摆杆控制而言，`X` 是必需控制量，`FLAGS.valid` 是必需状态量；`SEQ` 和 `CRC8` 强烈建议保留；`WIDTH` 是辅助质量信息，不参与基本 PID 时可以省略。当前不需要发送 `Y`，因为舵机主要依据水平 X 位置控制。
+- 最小可靠帧可以缩减为 `AA 55 FLAGS SEQ X_L X_H CRC8`（7 字节）；若已经有严格的超时检测且链路很短，可省略 `SEQ`，但不建议省略 `valid`、帧头或校验。
+- 115200 波特率按 8N1 计算，8 字节占用约 `0.694 ms` 的串行线时间；以 `20 Hz` 发送时线占用率约 `1.4%`，以 `30 Hz` 发送时约 `2.1%`，协议本身不会明显降低图传 FPS。真正的风险是发送函数在 TX 缓冲满时阻塞，或将坐标发送与大量 `ESP_LOGI` 共用 UART0；应优先使用独立 UART1、短固定帧和发送队列/非阻塞投递。
+- MSP 端收到 `valid=0` 时不得使用坐标；序号不变表示重复帧；超过约 `100~150 ms` 未收到新序号应进入数据失效保护；坐标跳变超过设定阈值时还应限幅或拒绝。
+- 当前最新 `yahboom_detection.c` 仍未实现该 UART 输出，仅完成 X 投影识别和日志输出；协议属于待接入设计，接入后需实测 `PERF_CAMERA`、图传 FPS、UART 丢帧和 MSP 数据新鲜度。

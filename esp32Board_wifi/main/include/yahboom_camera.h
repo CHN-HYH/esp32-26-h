@@ -233,6 +233,7 @@
 #define DETECTION_X_MIN_COLUMN_SAMPLES          2       // 有效投影列的最少前景采样点数
 #define DETECTION_X_MIN_WIDTH                   4       // 有效投影区间的最少连续采样列数
 #define DETECTION_X_MIN_SAMPLES                 10      // 有效投影区间的最少前景采样点总数
+#define DETECTION_MARKER_HALF_WIDTH_PIXELS      12      // 红色十字到左右白色竖线的距离，单位：像素
 #define DETECTION_LOST_COUNT                    3       // 连续丢失多少个检测周期后判定目标离开
 #define DETECTION_TRACK_MAX_JUMP_PIXELS         30      // 相邻检测周期允许的最大坐标跳变距离，单位：像素
 #define DETECTION_LOG_INTERVAL_MS               500     // 连续识别时坐标日志的最小输出间隔，单位：ms

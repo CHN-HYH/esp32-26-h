@@ -44,9 +44,10 @@ static void draw_yuv422_pixel(camera_fb_t *frame, int x, int y, const yuv422_col
     frame->buf[pair_offset + 3] = color->cr;
 }
 
-static void draw_detection_x_marker(camera_fb_t *frame, int left_x, int right_x,
-                                    int center_x, int roi_top, int roi_bottom)
+static void draw_detection_x_marker(camera_fb_t *frame, int center_x, int roi_top, int roi_bottom)
 {
+    const int left_x = center_x - DETECTION_MARKER_HALF_WIDTH_PIXELS;
+    const int right_x = center_x + DETECTION_MARKER_HALF_WIDTH_PIXELS;
     for (int y = roi_top; y < roi_bottom; y++)
     {
         draw_yuv422_pixel(frame, left_x, y, &kDetectionBoxColor);
@@ -408,10 +409,8 @@ static void detect_x_projection(camera_fb_t *frame)
 
     if (target_found)
     {
-        int left_x = roi_left + best_start_x * DETECTION_SCAN_STEP;
-        int right_x = roi_left + (best_end_x - 1) * DETECTION_SCAN_STEP;
         int width = (best_end_x - best_start_x) * DETECTION_SCAN_STEP;
-        draw_detection_x_marker(frame, left_x, right_x, best_center_x, roi_top, roi_bottom);
+        draw_detection_x_marker(frame, best_center_x, roi_top, roi_bottom);
 
         TickType_t now = xTaskGetTickCount();
         if (last_detection_log_tick == 0 ||

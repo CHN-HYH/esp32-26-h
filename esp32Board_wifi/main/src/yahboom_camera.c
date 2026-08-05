@@ -1,6 +1,7 @@
 #include "yahboom_camera.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "yahboom_camera";
@@ -19,6 +20,12 @@ static const yuv422_color_t kDetectionRoiColor = {150, 255, 100};
 static const yuv422_color_t kStatusBannerColor = {16, 128, 128};
 static const yuv422_color_t kStatusTextColor = {235, 128, 128};
 static const int kDetectionCrossRadius = 10;
+static const char kFpsCharacters[] = "FPS:0123456789";
+static const uint16_t kFpsGlyphs[] = {
+    0x79A4, 0x6BA4, 0x388E, 0x0410,
+    0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9,
+    0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF,
+};
 enum { LIGHT_DIFFERENCE_HISTOGRAM_SIZE = 511 };
 
 static uint8_t *background_y = NULL;
@@ -113,6 +120,70 @@ static void draw_detection_roi(camera_fb_t *frame)
     {
         draw_yuv422_pixel(frame, left, y, &kDetectionRoiColor);
         draw_yuv422_pixel(frame, right - 1, y, &kDetectionRoiColor);
+    }
+}
+
+static void draw_fps_overlay(camera_fb_t *frame)
+{
+    static TickType_t fps_start_tick = 0;
+    static uint16_t fps_frame_count = 0;
+    static uint16_t displayed_fps = 0;
+    TickType_t now = xTaskGetTickCount();
+
+    if (fps_start_tick == 0)
+        fps_start_tick = now;
+    fps_frame_count++;
+
+    TickType_t elapsed_ticks = now - fps_start_tick;
+    if (elapsed_ticks >= pdMS_TO_TICKS(1000))
+    {
+        uint32_t elapsed_ms = pdTICKS_TO_MS(elapsed_ticks);
+        displayed_fps = elapsed_ms == 0 ? 0 : fps_frame_count * 1000 / elapsed_ms;
+        fps_frame_count = 0;
+        fps_start_tick = now;
+    }
+    if (displayed_fps > 999)
+        displayed_fps = 999;
+
+    char text[10];
+    snprintf(text, sizeof(text), "FPS:%u", (unsigned)displayed_fps);
+    const int scale = frame->width >= 200 ? 2 : 1;
+    const int glyph_width = 3 * scale;
+    const int glyph_height = 5 * scale;
+    const int character_count = strlen(text);
+    const int text_width = character_count * glyph_width + (character_count - 1) * scale;
+    const int origin_x = (frame->width - text_width) / 2;
+    const int origin_y = scale * 3;
+
+    for (int y = origin_y - scale; y < origin_y + glyph_height + scale; y++)
+    {
+        for (int x = origin_x - scale; x < origin_x + text_width + scale; x++)
+            draw_yuv422_pixel(frame, x, y, &kStatusBannerColor);
+    }
+
+    for (int character = 0; character < character_count; character++)
+    {
+        const char *glyph_character = strchr(kFpsCharacters, text[character]);
+        if (glyph_character == NULL)
+            continue;
+
+        uint16_t glyph = kFpsGlyphs[glyph_character - kFpsCharacters];
+        int glyph_x = origin_x + character * (glyph_width + scale);
+        for (int row = 0; row < 5; row++)
+        {
+            for (int column = 0; column < 3; column++)
+            {
+                if ((glyph & (1U << (14 - row * 3 - column))) == 0)
+                    continue;
+
+                for (int offset_y = 0; offset_y < scale; offset_y++)
+                {
+                    for (int offset_x = 0; offset_x < scale; offset_x++)
+                        draw_yuv422_pixel(frame, glyph_x + column * scale + offset_x,
+                                          origin_y + row * scale + offset_y, &kStatusTextColor);
+                }
+            }
+        }
     }
 }
 
@@ -589,6 +660,7 @@ static void task_process_handler(void *arg)
             continue;
 
         detect_difference_circle(frame);
+        draw_fps_overlay(frame);
 
         if (xQueueSend(xQueueFrameO, &frame, 0) == pdTRUE)
             continue;

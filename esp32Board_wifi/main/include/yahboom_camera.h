@@ -236,6 +236,8 @@
 #define DETECTION_MARKER_HALF_WIDTH_PIXELS      12      // 红色十字到左右白色竖线的距离，单位：像素
 #define DETECTION_LOST_COUNT                    3       // 连续丢失多少个检测周期后判定目标离开
 #define DETECTION_TRACK_MAX_JUMP_PIXELS         30      // 相邻检测周期允许的最大坐标跳变距离，单位：像素
+#define DETECTION_REACQUIRE_CONFIRM_COUNT        2       // 远处单候选连续确认次数
+#define DETECTION_REACQUIRE_MAX_DRIFT_PIXELS    40       // 远处单候选相邻确认允许的最大 X 偏移，单位：像素
 #define DETECTION_LOG_INTERVAL_MS               500     // 连续识别时坐标日志的最小输出间隔，单位：ms
 #define STATUS_BANNER_DURATION_MS               3000    // 背景采集完成后 START 提示的显示时间，单位：ms
 

@@ -115,6 +115,14 @@
 - 增加 `tracked_velocity_x`，每次确认后记录本帧原始 X 与上一原始 X 的差。下一帧优先选择同时接近“预测位置 = 上次 X + 上次位移”或“上次 X”的候选，并在候选与预测位置或上次位置至少一者相差不超过 `DETECTION_TRACK_MAX_JUMP_PIXELS=30` 时确认。后一条件保证钢珠突然减速或停住时不会因预测超前而被误丢失。
 - 轨迹丢失、重捕获或大面积光照扰动导致清除轨迹时，同时清零速度预测。拒绝日志更新为 `DIFF_X_JUMP_REJECT x=<...> predicted_x=<...> previous_x=<...>`；本次未执行编译、烧录或实机验证。
 
+## 2026-08-05 多候选 X 跟踪（当前）
+
+- 当前已回到每两帧执行一次的一维 X 投影，不使用此前会导致 FPS 降至约 6 并卡死的单帧速度预测方案。
+- 每次投影扫描会统计所有满足最小宽度和最小前景点数的连续 X 区间，同时保留最强候选和距离 `tracked_center_x` 最近的候选。跟踪有效且存在近处候选时，近处候选优先，不再让远处强反光抢占坐标。
+- 无近处候选时，多个远处候选全部拒绝并保持旧坐标，限频输出 `DIFF_X_MULTIPLE_FAR candidates=<...> previous_x=<...>`。只有单个远处候选连续两次位置相近，才输出 `DIFF_X_REACQUIRED` 并更新坐标。
+- 当前重捕获参数为 `DETECTION_REACQUIRE_CONFIRM_COUNT=2`、`DETECTION_REACQUIRE_MAX_DRIFT_PIXELS=40`；后者用于兼顾每两帧采样下的快速移动，需根据实机速度调整。正常相邻跟踪仍使用 `DETECTION_TRACK_MAX_JUMP_PIXELS=30`。
+- 正常识别日志增加 `candidates=<...>`，用于观察是否存在多个前景。固定白线显示使用 `DETECTION_MARKER_HALF_WIDTH_PIXELS`，与候选原始宽度分离。本次未执行编译、烧录或实机验证。
+
 ## 2026-08-05 固定宽度标记
 
 - 当前图传的红色十字仍表示原始 X 投影重心；两条白色竖线不再表示候选前景区间边界，而是固定绘制于 `center_x +/- DETECTION_MARKER_HALF_WIDTH_PIXELS`。默认半宽为 `12 px`，可在 `main/include/yahboom_camera.h` 按钢珠实际像素直径调整。

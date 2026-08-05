@@ -244,6 +244,9 @@ static void detect_x_projection(camera_fb_t *frame)
     static bool tracked_position_valid = false;
     static int tracked_center_x = 0;
     static uint8_t tracking_missing_count = 0;
+    static bool reacquire_position_valid = false;
+    static int reacquire_center_x = 0;
+    static uint8_t reacquire_count = 0;
     int roi_left;
     int roi_top;
     int roi_right;
@@ -322,6 +325,8 @@ static void detect_x_projection(camera_fb_t *frame)
             tracked_position_valid = false;
             tracking_missing_count = 0;
         }
+        reacquire_position_valid = false;
+        reacquire_count = 0;
         update_x_detection_state(false);
         draw_detection_roi(frame);
         yahboom_overlay_draw_status(frame);
@@ -329,15 +334,22 @@ static void detect_x_projection(camera_fb_t *frame)
     }
 
     bool candidate_found = false;
+    uint8_t candidate_count = 0;
     uint32_t best_samples = 0;
     uint32_t best_weighted_x = 0;
     int best_start_x = 0;
     int best_end_x = 0;
+    bool near_candidate_found = false;
+    uint32_t near_samples = 0;
+    uint32_t near_weighted_x = 0;
+    int near_start_x = 0;
+    int near_end_x = 0;
+    int near_distance_x = 0;
     int candidate_start_x = -1;
     uint32_t candidate_samples = 0;
     uint32_t candidate_weighted_x = 0;
 
-    // 连续有效列构成一个候选目标，按前景采样点总数选取最强候选。
+    // 同时保留最强候选和最接近上次坐标的候选，避免远处强反光抢走目标。
     for (int sample_x = 0; sample_x <= sample_width; sample_x++)
     {
         bool column_is_active = sample_x < sample_width &&
@@ -361,42 +373,97 @@ static void detect_x_projection(camera_fb_t *frame)
 
         int candidate_width = sample_x - candidate_start_x;
         if (candidate_width >= DETECTION_X_MIN_WIDTH &&
-            candidate_samples >= DETECTION_X_MIN_SAMPLES &&
-            candidate_samples > best_samples)
+            candidate_samples >= DETECTION_X_MIN_SAMPLES)
         {
-            best_samples = candidate_samples;
-            best_weighted_x = candidate_weighted_x;
-            best_start_x = candidate_start_x;
-            best_end_x = sample_x;
-            candidate_found = true;
+            candidate_count++;
+            int candidate_center_x = candidate_weighted_x / candidate_samples;
+            int candidate_distance_x = candidate_center_x - tracked_center_x;
+            if (candidate_distance_x < 0)
+                candidate_distance_x = -candidate_distance_x;
+
+            if (!candidate_found || candidate_samples > best_samples)
+            {
+                best_samples = candidate_samples;
+                best_weighted_x = candidate_weighted_x;
+                best_start_x = candidate_start_x;
+                best_end_x = sample_x;
+                candidate_found = true;
+            }
+
+            if (candidate_distance_x <= DETECTION_TRACK_MAX_JUMP_PIXELS &&
+                (!near_candidate_found || candidate_distance_x < near_distance_x ||
+                 (candidate_distance_x == near_distance_x && candidate_samples > near_samples)))
+            {
+                near_samples = candidate_samples;
+                near_weighted_x = candidate_weighted_x;
+                near_start_x = candidate_start_x;
+                near_end_x = sample_x;
+                near_distance_x = candidate_distance_x;
+                near_candidate_found = true;
+            }
         }
         candidate_start_x = -1;
     }
 
     bool target_found = false;
     int best_center_x = 0;
-    if (candidate_found)
+    if (tracked_position_valid && near_candidate_found)
+    {
+        best_samples = near_samples;
+        best_weighted_x = near_weighted_x;
+        best_start_x = near_start_x;
+        best_end_x = near_end_x;
+        best_center_x = best_weighted_x / best_samples;
+        target_found = true;
+        tracked_center_x = best_center_x;
+        tracking_missing_count = 0;
+        reacquire_position_valid = false;
+        reacquire_count = 0;
+    }
+    else if (candidate_count == 1 && candidate_found)
     {
         best_center_x = best_weighted_x / best_samples;
-        int jump_x = best_center_x - tracked_center_x;
-        if (jump_x < 0)
-            jump_x = -jump_x;
+        int drift_x = best_center_x - reacquire_center_x;
+        if (drift_x < 0)
+            drift_x = -drift_x;
 
-        if (!tracked_position_valid || jump_x <= DETECTION_TRACK_MAX_JUMP_PIXELS)
+        if (!reacquire_position_valid || drift_x > DETECTION_REACQUIRE_MAX_DRIFT_PIXELS)
+        {
+            reacquire_position_valid = true;
+            reacquire_center_x = best_center_x;
+            reacquire_count = 1;
+        }
+        else
+        {
+            reacquire_center_x = best_center_x;
+            reacquire_count++;
+        }
+
+        if (reacquire_count >= DETECTION_REACQUIRE_CONFIRM_COUNT)
         {
             target_found = true;
             tracked_position_valid = true;
             tracked_center_x = best_center_x;
             tracking_missing_count = 0;
+            reacquire_position_valid = false;
+            reacquire_count = 0;
+            ESP_LOGI(TAG, "DIFF_X_REACQUIRED x=%d", best_center_x);
         }
-        else
+    }
+    else
+    {
+        reacquire_position_valid = false;
+        reacquire_count = 0;
+
+        if (candidate_count > 1)
         {
             TickType_t now = xTaskGetTickCount();
             if (last_detection_log_tick == 0 ||
                 now - last_detection_log_tick >= pdMS_TO_TICKS(DETECTION_LOG_INTERVAL_MS))
             {
                 last_detection_log_tick = now;
-                ESP_LOGI(TAG, "DIFF_X_JUMP_REJECT x=%d previous_x=%d", best_center_x, tracked_center_x);
+                ESP_LOGI(TAG, "DIFF_X_MULTIPLE_FAR candidates=%u previous_x=%d",
+                         (unsigned)candidate_count, tracked_center_x);
             }
         }
     }
@@ -405,6 +472,8 @@ static void detect_x_projection(camera_fb_t *frame)
     {
         tracked_position_valid = false;
         tracking_missing_count = 0;
+        reacquire_position_valid = false;
+        reacquire_count = 0;
     }
 
     if (target_found)
@@ -417,8 +486,9 @@ static void detect_x_projection(camera_fb_t *frame)
             now - last_detection_log_tick >= pdMS_TO_TICKS(DETECTION_LOG_INTERVAL_MS))
         {
             last_detection_log_tick = now;
-            ESP_LOGI(TAG, "DIFF_X x=%d width=%d samples=%u offset=%d",
-                     best_center_x, width, (unsigned)best_samples, light_offset);
+            ESP_LOGI(TAG, "DIFF_X x=%d width=%d samples=%u candidates=%u offset=%d",
+                     best_center_x, width, (unsigned)best_samples,
+                     (unsigned)candidate_count, light_offset);
         }
     }
 

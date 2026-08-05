@@ -141,3 +141,10 @@
 - `main/src/yahboom_detection.c` 的 ROI 亮度中值补偿改为使用 `DETECTION_SCAN_STEP * 2` 的稀疏采样；目标 X 投影仍保持原来的步长 2，避免改变坐标采样精度。
 - `main/src/yahboom_detection.c` 和 `main/src/yahboom_overlay.c` 的 YUV422 单像素绘制辅助函数改为 `static inline`，减少每帧 ROI/FPS/目标标记叠加的函数调用开销。
 - 未修改多候选优先级、重捕获确认、阈值、ROI、分辨率和每两帧检测节奏。该优化尚未由用户编译、烧录和实机验证；需要重点观察 FPS、钢珠丢失率和光照变化下的亮度补偿稳定性。
+
+## 2026-08-05 帧率分段耗时诊断（待实机验证）
+
+- 新增 `main/include/yahboom_performance.h` 和 `main/src/yahboom_performance.c`，每两秒低频输出摄像头任务与图传任务的耗时统计，不记录每帧日志。
+- `PERF_CAMERA` 字段：`capture_avg/max` 为 `esp_camera_fb_get()` 耗时，`detect_avg/max` 为识别模块耗时，`overlay_avg/max` 为 FPS 叠加耗时，`queue_replace` 为图传队列满而丢弃旧帧的次数。
+- `PERF_STREAM` 字段：`wait_avg/max` 为等待输入帧耗时，`encode_avg/max` 为 JPEG 编码耗时，`send_avg/max` 为 HTTP 发送耗时，`fallback` 为退回通用 `frame2jpg()` 的次数。
+- 本次只增加诊断，不改变帧队列策略、识别结果或图像参数；未编译、烧录或实机验证，由用户执行。

@@ -25,6 +25,8 @@
 #include "sdkconfig.h"
 
 #include "yahboom_camera.h"
+#include "yahboom_performance.h"
+#include "esp_timer.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
 #include "esp32-hal-log.h"
@@ -231,11 +233,16 @@ static esp_err_t stream_handler(httpd_req_t *req)
     while (true)
     {
         bool jpg_buf_allocated = false;
+        bool fallback_encoder_used = false;
+        const int64_t queue_wait_start_us = esp_timer_get_time();
 
         if (xQueueReceive(xQueueFrameI, &frame, portMAX_DELAY))
         {
+            const uint32_t queue_wait_us =
+                static_cast<uint32_t>(esp_timer_get_time() - queue_wait_start_us);
             _timestamp.tv_sec = frame->timestamp.tv_sec;
             _timestamp.tv_usec = frame->timestamp.tv_usec;
+            const int64_t encode_start_us = esp_timer_get_time();
 
             if (frame->format == PIXFORMAT_JPEG)
             {
@@ -247,13 +254,18 @@ static esp_err_t stream_handler(httpd_req_t *req)
             }
             else if (!frame2jpg(frame, STREAM_JPEG_QUALITY, &_jpg_buf, &_jpg_buf_len))
             {
+                fallback_encoder_used = true;
                 ESP_LOGE(TAG, "JPEG compression failed");
                 res = ESP_FAIL;
             }
             else
             {
+                fallback_encoder_used = true;
                 jpg_buf_allocated = true;
             }
+            const uint32_t encode_us =
+                static_cast<uint32_t>(esp_timer_get_time() - encode_start_us);
+            const size_t encoded_jpeg_size = _jpg_buf_len;
 
             // YUV/RGB 帧已编码到独立 JPEG 缓冲，可在网络发送前归还摄像头帧。
             if (res == ESP_OK && xQueueFrameO == NULL && gReturnFB && frame->format != PIXFORMAT_JPEG)
@@ -261,27 +273,28 @@ static esp_err_t stream_handler(httpd_req_t *req)
                 esp_camera_fb_return(frame);
                 frame = NULL;
             }
+            const int64_t send_start_us = esp_timer_get_time();
+            if (res == ESP_OK)
+                res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+
+            if (res == ESP_OK)
+            {
+                size_t hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART, _jpg_buf_len,
+                                       (long long)_timestamp.tv_sec, (long long)_timestamp.tv_usec);
+                res = httpd_resp_send_chunk(req, (const char *)part_buf, hlen);
+            }
+
+            if (res == ESP_OK)
+                res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
+
+            const uint32_t send_us =
+                static_cast<uint32_t>(esp_timer_get_time() - send_start_us);
+            yahboom_performance_record_stream(queue_wait_us, encode_us, send_us,
+                                               encoded_jpeg_size, fallback_encoder_used);
         }
         else
         {
             res = ESP_FAIL;
-        }
-
-        if (res == ESP_OK)
-        {
-            res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
-        }
-
-        if (res == ESP_OK)
-        {
-            size_t hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART, _jpg_buf_len,
-                                   (long long)_timestamp.tv_sec, (long long)_timestamp.tv_usec);
-            res = httpd_resp_send_chunk(req, (const char *)part_buf, hlen);
-        }
-
-        if (res == ESP_OK)
-        {
-            res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
         }
 
         if (jpg_buf_allocated)

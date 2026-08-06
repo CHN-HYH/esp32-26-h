@@ -12,9 +12,9 @@
 #define BACKGROUND_WARMUP_FRAMES                20      // 等待结束后丢弃的相机稳定帧数
 #define BACKGROUND_CAPTURE_FRAMES               8       // 用于平均生成空场景背景的帧数
 #define DETECTION_ROI_X                         0       // 识别区域左上角 X 坐标
-#define DETECTION_ROI_Y                         95      // 识别区域左上角 Y 坐标
+#define DETECTION_ROI_Y                         98      // 识别区域左上角 Y 坐标
 #define DETECTION_ROI_WIDTH                     320     // 识别区域宽度，单位：像素
-#define DETECTION_ROI_HEIGHT                    50      // 识别区域高度，单位：像素
+#define DETECTION_ROI_HEIGHT                    44      // 识别区域高度，单位：像素
 #define DETECTION_SCAN_STEP                     2       // 差分扫描步长
 #define DETECTION_EDGE_MARGIN                   0       // 画面安全边缘宽度，单位：像素
 #define DETECTION_BRIGHT_THRESHOLD              35      // 补偿后比背景更亮时的最小亮度差
@@ -27,7 +27,7 @@
 #define DETECTION_LOST_COUNT                    3       // 连续丢失多少个检测周期后判定目标离开
 #define DETECTION_TRACK_MAX_JUMP_PIXELS         30      // 跟踪有效时允许的最大 X 偏移，单位：像素
 #define DETECTION_REACQUIRE_CONFIRM_COUNT       2       // 远处单候选连续确认次数
-#define DETECTION_REACQUIRE_MAX_DRIFT_PIXELS   40       // 远处单候选相邻确认允许的最大 X 偏移，单位：像素
+#define DETECTION_REACQUIRE_MAX_DRIFT_PIXELS    40      // 远处单候选相邻确认允许的最大 X 偏移，单位：像素
 #define DETECTION_LOG_INTERVAL_MS               500     // 坐标日志的最小输出间隔，单位：ms
 #define STATUS_BANNER_DURATION_MS               3000    // 背景采集完成后 START 提示的显示时间，单位：ms
 

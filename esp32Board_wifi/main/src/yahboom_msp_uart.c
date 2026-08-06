@@ -12,16 +12,13 @@ static const char *TAG = "yahboom_msp_uart";
 static QueueHandle_t s_packet_queue;
 static uint8_t s_sequence;
 
-static uint8_t calculate_crc8(const uint8_t *data, size_t length)
+static uint8_t calculate_checksum(const uint8_t *data, size_t length)
 {
-    uint8_t crc = 0;
+    uint16_t sum = 0;
     for (size_t index = 0; index < length; index++)
-    {
-        crc ^= data[index];
-        for (uint8_t bit = 0; bit < 8; bit++)
-            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
-    }
-    return crc;
+        sum += data[index];
+
+    return (uint8_t)(sum & 0xFF);
 }
 
 static void sender_task(void *arg)
@@ -97,7 +94,7 @@ bool yahboom_msp_uart_send(bool valid, uint16_t center_x, uint16_t width)
         packet[5] = 0;
         packet[6] = 0;
     }
-    packet[7] = calculate_crc8(packet, YAHBOOM_MSP_UART_PACKET_SIZE - 1);
+    packet[7] = calculate_checksum(packet, YAHBOOM_MSP_UART_PACKET_SIZE - 1);
 
     // 队列只保留最新状态，避免串口发送落后时堆积旧坐标。
     return xQueueOverwrite(s_packet_queue, packet) == pdPASS;

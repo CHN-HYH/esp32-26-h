@@ -43,8 +43,8 @@ char AP_wifi_SSID[30] = "Yahboom_ESP32_WIFI"; //AP-wifi名称
 char AP_wifi_PASSWD[20] = ""; //AP-wifi密码
 
 //STA模式
-char wifi_SSID[20] = "Yahboom3"; //sta-wifi名称
-char wifi_PASSWD[20] = "yahboom890729"; //sta-wifi密码
+char wifi_SSID[20] = "Redmi-K50"; //sta-wifi名称
+char wifi_PASSWD[20] = "huang1223."; //sta-wifi密码
 
 
 uint8_t sta_ip_connect[4] = {0,0,0,0}; //只有连接上了才会有ip地址打印

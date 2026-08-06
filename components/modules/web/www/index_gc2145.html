@@ -334,8 +334,17 @@
                 min-width: 160px
             }
             #stream {
+                position: absolute;
+                width: 1px;
+                height: 1px;
+                opacity: 0;
+                pointer-events: none;
+            }
+            #stream-display {
+                display: block;
                 width: min(90vw, 640px);
                 height: auto;
+                background: #000;
             }
             .close {
                 position: absolute;
@@ -713,6 +722,7 @@
                     <div id="stream-container" class="image-container hidden">
                         <button id="toggle-record" class="button save" type="button">Record MP4</button>
                         <div class="close" id="close-stream">×</div>
+                        <canvas id="stream-display" width="320" height="240"></canvas>
                         <img id="stream" src="" crossorigin>
                     </div>
                 </figure>
@@ -1019,8 +1029,15 @@ document.addEventListener('DOMContentLoaded', function (event) {
   const enrollButton = document.getElementById('face_enroll')
   const closeButton = document.getElementById('close-stream')
   const recordButton = document.getElementById('toggle-record')
+  const display = document.getElementById('stream-display')
+  const displayContext = display.getContext('2d')
   const ledGroup = document.getElementById('led-group')
-  const recordFps = 20
+  const recordFps = 10
+  let streamReconnectTimer = null
+  let streamManuallyStopped = true
+  let streamLastFrameAt = 0
+  let streamWatchdogTimer = null
+  let streamPreviewTimer = null
   let mediaRecorder = null
   let recordMimeType = ''
   let recordStream = null
@@ -1115,6 +1132,40 @@ document.addEventListener('DOMContentLoaded', function (event) {
     checkFrame()
   })
 
+  const updatePreviewFrame = () => {
+    if (view.naturalWidth <= 0 || view.naturalHeight <= 0 || !view.complete)
+      return
+    if (display.width !== view.naturalWidth || display.height !== view.naturalHeight) {
+      display.width = view.naturalWidth
+      display.height = view.naturalHeight
+    }
+    try {
+      displayContext.drawImage(view, 0, 0, display.width, display.height)
+    } catch (error) {
+      // 源图断线或正在切换时保留 Canvas 上一帧。
+    }
+  }
+
+  const scheduleStreamReconnect = () => {
+    if (streamManuallyStopped || streamReconnectTimer !== null)
+      return
+
+    streamReconnectTimer = setTimeout(() => {
+      streamReconnectTimer = null
+      if (streamManuallyStopped)
+        return
+
+      // Canvas 已经保存最后一帧，可以安全中止卡住的后台图片请求。
+      streamReconnectTimer = setTimeout(() => {
+        streamReconnectTimer = null
+        if (!streamManuallyStopped)
+          view.src = `${streamUrl}/stream?_cb=${Date.now()}`
+      }, 100)
+      streamLastFrameAt = Date.now()
+      view.src = ''
+    }, 500)
+  }
+
   const stopRecording = () => {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       recordButton.disabled = true
@@ -1145,8 +1196,8 @@ document.addEventListener('DOMContentLoaded', function (event) {
       await waitForStreamFrame()
 
       recordCanvas = document.createElement('canvas')
-      recordCanvas.width = view.naturalWidth
-      recordCanvas.height = view.naturalHeight
+      recordCanvas.width = display.width
+      recordCanvas.height = display.height
       recordContext = recordCanvas.getContext('2d')
       recordStream = recordCanvas.captureStream(recordFps)
       recordChunks = []
@@ -1180,7 +1231,7 @@ document.addEventListener('DOMContentLoaded', function (event) {
 
       const drawFrame = () => {
         try {
-          recordContext.drawImage(view, 0, 0, recordCanvas.width, recordCanvas.height)
+          recordContext.drawImage(display, 0, 0, recordCanvas.width, recordCanvas.height)
         } catch (error) {
           console.error('写入录制画面失败', error)
         }
@@ -1210,16 +1261,52 @@ document.addEventListener('DOMContentLoaded', function (event) {
   }
 
   const stopStream = () => {
+    streamManuallyStopped = true
+    if (streamReconnectTimer !== null) {
+      clearTimeout(streamReconnectTimer)
+      streamReconnectTimer = null
+    }
     stopRecording()
     window.stop();
+    view.src = ''
+    if (streamWatchdogTimer !== null) {
+      clearInterval(streamWatchdogTimer)
+      streamWatchdogTimer = null
+    }
+    if (streamPreviewTimer !== null) {
+      clearInterval(streamPreviewTimer)
+      streamPreviewTimer = null
+    }
     streamButton.innerHTML = 'Start Stream'
   }
 
   const startStream = () => {
-    view.src = `${streamUrl}/stream`
+    streamManuallyStopped = false
+    streamLastFrameAt = Date.now()
+    view.src = `${streamUrl}/stream?_cb=${Date.now()}`
     show(viewContainer)
     streamButton.innerHTML = 'Stop Stream'
+    if (streamPreviewTimer === null)
+      streamPreviewTimer = setInterval(updatePreviewFrame, 50)
+    if (streamWatchdogTimer === null) {
+      streamWatchdogTimer = setInterval(() => {
+        if (streamManuallyStopped)
+          return
+        if (Date.now() - streamLastFrameAt > 6000)
+          scheduleStreamReconnect()
+      }, 1000)
+    }
   }
+
+  view.onload = () => {
+    streamLastFrameAt = Date.now()
+  }
+
+  view.onerror = () => {
+    scheduleStreamReconnect()
+  }
+
+  view.onabort = view.onerror
 
   // Attach actions to buttons
   stillButton.onclick = () => {

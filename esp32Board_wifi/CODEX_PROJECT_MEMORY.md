@@ -230,3 +230,21 @@
 - 日志 `80b58492-c956-4cb2-b932-15f4cc38fdf1/pasted-text.txt` 显示黑屏时 `PERF_CAMERA capture_avg` 约 `75 ms`、`detect_avg` 约 `1~2 ms`，识别链路未停止；同时出现 `httpd_sock_err error 11`、`send_max=1120859 us`，说明是 `/stream` TCP 发送超时后连接退出。
 - 原网页 watchdog 只在 `MediaRecorder.state === 'recording'` 时运行，因此录像时能自动恢复，普通预览断线后会黑屏并需要手动重新点击 `Start Stream`。
 - 已将 watchdog 条件改为所有已启动的图传连接均生效；页面 watchdog 每约 6 秒检查一次最近图片 `load`，超时主动重建 `/stream`。网页 gzip 已同步更新，内联脚本语法检查通过，ESP-IDF 构建通过；尚未烧录和再次实机验证。
+
+## 2026-08-06 VGA 640x480 图传与 ROI 识别测试版
+
+- 用户需要网页画面覆盖完整摆杆，当前 `320x240` 视野不足，因此已将相机原始帧、独立 JPEG 流和旧图传编码器统一设为 `640x480`：`main/app_main.cpp` 使用 `YAHBOOM_CAMERA_FRAME_SIZE=FRAMESIZE_VGA`，尺寸常量统一定义在 `main/include/yahboom_camera.h`。
+- `components/yahboom_esp32-camera/sensors/gc2145.c` 原先在 `CONFIG_GC_SENSOR_SUBSAMPLE_MODE` 下无条件覆盖为 `320x240`；当前保留原 QVGA 寄存器路径，并为 VGA 写入标准 1:1 输出配置：`0x99=0x11`、输出高 `0x95/0x96=0x01e0`、输出宽 `0x97/0x98=0x0280`，输出裁剪起点为零。
+- 识别仍只扫描 ROI，不处理整帧；原 `320x240` 的 ROI `x=0,y=107,width=320,height=26` 已等比例放大为 `x=0,y=214,width=640,height=52`，显示标记和像素级跟踪阈值同步乘二。此 ROI 只是首次 VGA 测试的初值，必须按网页实机画面重新校准。
+- `main/src/yahboom_msp_uart.c` 已将相机原始 X 坐标从 `0~639` 等比例映射回协议原有的 `0~319`，候选宽度也映射为 320 像素宽度下的等效值；MSPM0 的数据包格式、PID 中心值和现有校验均无需因 VGA 改动。未经该映射，UART 原有的 `319` 上限会使右半幅坐标错误饱和。
+- 独立 JPEG 流质量保持 `40`、输出缓冲保持 `128 KB`，以控制 PSRAM 与 Wi-Fi 压力；VGA YUV422 单帧约 `600 KB`，图传帧率和延迟预计会显著变差。若出现 JPEG 编码失败、背景 PSRAM 分配失败、花屏或明显卡顿，优先退回 QVGA，不要调整到曾导致花屏的 `XCLK_FREQ_HZ=16000000`。
+- 已完成 ESP-IDF 完整构建，生成 `build/Camera_Display.bin`，大小 `0x101030`，最小应用分区剩余约 `73%`；未烧录、未进行实机验证。烧录后应检查网页是否为真实 `640x480`、完整摆杆是否进入画面、`JPEG stream ready: 640x480`、`BACKGROUND_READY`、`PERF_CAMERA`/`PERF_STREAM`，并在水管为空且无阴影时重新采集背景。
+
+## 2026-08-06 水管反光钢珠亮芯暗环识别
+
+- 用户实机画面中，水管内部整体高亮，钢珠表现为中心亮斑、外围暗环；原背景差分和 X 投影会受反光、阴影、自动曝光及钢珠进入背景采集时机影响，无法稳定识别。
+- 当前实际源码使用 `FRAMESIZE_QVGA (320x240)` 原始帧，网页将画面放大显示；亮芯暗环参数必须按原始像素调节，初始 ROI 为 `x=0,y=98,width=320,height=44`，中心半径 `1`、暗环半径 `4`、水管中线上下搜索 `7` 像素。
+- `main/src/yahboom_detection.c` 已完全移除背景图 PSRAM 分配、延时空背景采集、亮度偏移计算、差分掩码和 X 投影。新算法读取 YUV422 的 Y 通道，对每个候选中心计算 5 点亮芯均值以及 8 点暗环均值；仅当中心亮度至少 `120`、亮暗对比至少 `32`、至少 `6` 个暗环点比中心低 `18` 时接受候选。
+- 每个 X 仅保留水管中心带内的最强匹配，再合并连续列并沿用两次重捕获、30 像素跳变限幅和连续 3 次丢失保护。检测框和红色十字现在绘制在实际匹配到的 `(x,y)`；MSPM0 协议保持不变，`WIDTH` 初始发送暗环直径 `8`。
+- 新日志：`RING_REACQUIRED`、`RING`、`RING_FOUND`、`RING_LOST`。未命中时每 500 ms 输出 `RING_NO_MATCH center=<亮芯亮度> contrast=<亮暗对比> dark=<暗环点数>`，用于实机调参；若主要是 `contrast` 偏低先降低 `DETECTION_RING_MIN_SCORE`，若 `dark` 偏低先降低 `DETECTION_RING_MIN_DARK_SAMPLES` 或扩大暗环半径。
+- 已用 ESP-IDF Ninja 完整构建通过，生成 `build/Camera_Display.bin`，大小 `0x100d90`，最小应用分区剩余约 `73%`。未烧录、未完成现场识别和 MSPM0 联调验证。

@@ -2,12 +2,12 @@
 #include "yahboom_detection.h"
 #include "yahboom_overlay.h"
 #include "yahboom_performance.h"
+#include "yahboom_jpeg_stream.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
 
 static const char *TAG = "yahboom_camera";
-static QueueHandle_t xQueueFrameO = NULL;
 static yahboom_detection_context_t detection_context;
 
 static void task_process_handler(void *arg)
@@ -30,21 +30,22 @@ static void task_process_handler(void *arg)
         yahboom_overlay_draw_fps(frame);
         const uint32_t overlay_us = (uint32_t)(esp_timer_get_time() - overlay_start_us);
 
-        if (xQueueSend(xQueueFrameO, &frame, 0) == pdTRUE)
+        bool queue_replaced = false;
+        if (yahboom_capture_publish_frame(frame, &queue_replaced))
+        {
+            yahboom_performance_record_camera(capture_us, detection_us, overlay_us, queue_replaced);
+            continue;
+        }
+
+        if (yahboom_jpeg_stream_submit_frame(frame))
         {
             yahboom_performance_record_camera(capture_us, detection_us, overlay_us, false);
             continue;
         }
 
         // 队列只保留最新帧，旧帧必须先归还摄像头驱动。
-        camera_fb_t *stale_frame = NULL;
-        if (xQueueReceive(xQueueFrameO, &stale_frame, 0) == pdTRUE)
-            esp_camera_fb_return(stale_frame);
-
-        if (xQueueSend(xQueueFrameO, &frame, 0) != pdTRUE)
-            esp_camera_fb_return(frame);
-
-        yahboom_performance_record_camera(capture_us, detection_us, overlay_us, true);
+        esp_camera_fb_return(frame);
+        yahboom_performance_record_camera(capture_us, detection_us, overlay_us, false);
     }
 }
 
@@ -130,6 +131,6 @@ void my_register_camera(const pixformat_t pixel_format,
     }
 
     yahboom_detection_init(&detection_context);
-    xQueueFrameO = frame_queue;
+    yahboom_jpeg_stream_init(frame_queue);
     xTaskCreatePinnedToCore(task_process_handler, TAG, 3 * 1024, NULL, 5, NULL, 1);
 }

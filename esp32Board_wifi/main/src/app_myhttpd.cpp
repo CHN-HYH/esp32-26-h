@@ -26,6 +26,7 @@
 
 #include "yahboom_camera.h"
 #include "yahboom_performance.h"
+#include "yahboom_jpeg_stream.h"
 #include "esp_timer.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
@@ -203,6 +204,50 @@ static esp_err_t capture_handler(httpd_req_t *req)
     return res;
 }
 
+static esp_err_t capture_handler_v2(httpd_req_t *req)
+{
+    camera_fb_t *frame = NULL;
+    esp_err_t res = ESP_OK;
+
+    yahboom_capture_start();
+    if (!yahboom_capture_get_frame(&frame, portMAX_DELAY))
+    {
+        yahboom_capture_stop();
+        ESP_LOGE(TAG, "Camera capture failed");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    char ts[32];
+    snprintf(ts, sizeof(ts), "%lld.%06ld", frame->timestamp.tv_sec, frame->timestamp.tv_usec);
+    httpd_resp_set_hdr(req, "X-Timestamp", ts);
+
+    if (frame->format == PIXFORMAT_JPEG)
+    {
+        res = httpd_resp_send(req, (const char *)frame->buf, frame->len);
+    }
+    else
+    {
+        jpg_chunking_t jchunk = {req, 0};
+        res = frame2jpg_cb(frame, 80, jpg_encode_stream, &jchunk) ? ESP_OK : ESP_FAIL;
+        httpd_resp_send_chunk(req, NULL, 0);
+    }
+
+    if (xQueueFrameO)
+        xQueueSend(xQueueFrameO, &frame, portMAX_DELAY);
+    else if (gReturnFB)
+        esp_camera_fb_return(frame);
+    else
+        free(frame);
+
+    yahboom_capture_stop();
+    return res;
+}
+
 static esp_err_t stream_handler(httpd_req_t *req)
 {
     camera_fb_t *frame = NULL;
@@ -328,6 +373,74 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
     stream_jpeg_encoder_deinit(&encoder);
 
+    return res;
+}
+
+static esp_err_t stream_handler_v2(httpd_req_t *req)
+{
+    char part_buf[160];
+    esp_err_t res = ESP_OK;
+    const int stream_sock = httpd_req_to_sockfd(req);
+    const int tcp_nodelay = 1;
+    struct timeval send_timeout;
+    send_timeout.tv_sec = 0;
+    send_timeout.tv_usec = 800000;
+
+    if (setsockopt(stream_sock, IPPROTO_TCP, TCP_NODELAY,
+                   &tcp_nodelay, sizeof(tcp_nodelay)) < 0)
+    {
+        ESP_LOGW(TAG, "Failed to enable TCP_NODELAY for stream");
+    }
+
+    // 录屏端处理变慢时，限制单次 TCP 发送阻塞时间，失败后由网页端自动重连。
+    if (setsockopt(stream_sock, SOL_SOCKET, SO_SNDTIMEO,
+                   &send_timeout, sizeof(send_timeout)) < 0)
+    {
+        ESP_LOGW(TAG, "Failed to set stream send timeout");
+    }
+
+    res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
+    if (res != ESP_OK)
+        return res;
+
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    yahboom_jpeg_stream_start();
+
+    while (true)
+    {
+        yahboom_jpeg_frame_t jpeg = {};
+        const int64_t wait_start_us = esp_timer_get_time();
+        if (!yahboom_jpeg_stream_wait(&jpeg, pdMS_TO_TICKS(1000)))
+        {
+            res = ESP_FAIL;
+            break;
+        }
+
+        const uint32_t wait_us = (uint32_t)(esp_timer_get_time() - wait_start_us);
+        const int64_t send_start_us = esp_timer_get_time();
+
+        res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+        if (res == ESP_OK)
+        {
+            const size_t hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART,
+                                         (unsigned)jpeg.length,
+                                         (long long)jpeg.timestamp_sec,
+                                         (long long)jpeg.timestamp_usec);
+            res = httpd_resp_send_chunk(req, part_buf, hlen);
+        }
+        if (res == ESP_OK)
+            res = httpd_resp_send_chunk(req, (const char *)jpeg.data, jpeg.length);
+
+        const uint32_t send_us = (uint32_t)(esp_timer_get_time() - send_start_us);
+        yahboom_performance_record_stream(wait_us, jpeg.encode_time_us, send_us,
+                                           jpeg.length, false);
+        yahboom_jpeg_stream_release();
+
+        if (res != ESP_OK)
+            break;
+    }
+
+    yahboom_jpeg_stream_stop();
     return res;
 }
 
@@ -813,6 +926,7 @@ void register_httpd(const QueueHandle_t frame_i, const QueueHandle_t frame_o, co
 
     
     myconfig.max_uri_handlers = 13;
+    myconfig.send_wait_timeout = 1;
 
     httpd_uri_t index_uri = {
         .uri = "/",
@@ -835,13 +949,13 @@ void register_httpd(const QueueHandle_t frame_i, const QueueHandle_t frame_o, co
     httpd_uri_t capture_uri = {
         .uri = "/capture",
         .method = HTTP_GET,
-        .handler = capture_handler,
+        .handler = capture_handler_v2,
         .user_ctx = NULL};
 
     httpd_uri_t stream_uri = {
         .uri = "/stream",  //stream
         .method = HTTP_GET,
-        .handler = stream_handler,
+        .handler = stream_handler_v2,
         .user_ctx = NULL};
 
     httpd_uri_t xclk_uri = {

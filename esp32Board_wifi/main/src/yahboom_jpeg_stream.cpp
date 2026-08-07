@@ -8,7 +8,7 @@
 
 #define YAHBOOM_JPEG_WIDTH 320
 #define YAHBOOM_JPEG_HEIGHT 240
-#define YAHBOOM_JPEG_QUALITY 40
+#define YAHBOOM_JPEG_QUALITY 20  // 仅降低网页图传质量，本地识别仍使用完整 YUV422 原始帧
 #define YAHBOOM_JPEG_BUFFER_SIZE (128 * 1024)
 
 static const char *TAG = "yahboom_jpeg";

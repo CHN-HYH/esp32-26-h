@@ -17,7 +17,9 @@
 #define DETECTION_RING_CENTER_RADIUS                    1
 #define DETECTION_RING_RADIUS                           4
 #define DETECTION_RING_DIAGONAL_OFFSET                  3
-#define DETECTION_RING_CENTERLINE_HALF_HEIGHT           7
+#define DETECTION_RING_CENTERLINE_HALF_HEIGHT           5
+#define DETECTION_RING_SCAN_STEP                        2
+#define DETECTION_RING_TRACK_SEARCH_HALF_WIDTH         48
 #define DETECTION_RING_MIN_CENTER_BRIGHTNESS            120
 #define DETECTION_RING_MIN_SCORE                        32
 #define DETECTION_RING_MIN_DARK_SAMPLE_CONTRAST         18

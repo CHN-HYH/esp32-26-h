@@ -256,8 +256,19 @@ static void detect_bright_ring(yahboom_detection_context_t *context, camera_fb_t
     }
     context->detect_frame_count = 0;
 
-    const int scan_left = roi_left + DETECTION_RING_RADIUS;
-    const int scan_right = roi_right - DETECTION_RING_RADIUS;
+    int scan_left = roi_left + DETECTION_RING_RADIUS;
+    int scan_right = roi_right - DETECTION_RING_RADIUS;
+    if (context->tracking.position_valid)
+    {
+        const int tracked_left = context->tracking.center_x -
+                                 DETECTION_RING_TRACK_SEARCH_HALF_WIDTH;
+        const int tracked_right = context->tracking.center_x +
+                                  DETECTION_RING_TRACK_SEARCH_HALF_WIDTH;
+        if (tracked_left > scan_left)
+            scan_left = tracked_left;
+        if (tracked_right < scan_right)
+            scan_right = tracked_right;
+    }
     const int centerline_y = (roi_top + roi_bottom - 1) / 2;
     int scan_top = centerline_y - DETECTION_RING_CENTERLINE_HALF_HEIGHT;
     int scan_bottom = centerline_y + DETECTION_RING_CENTERLINE_HALF_HEIGHT;
@@ -287,11 +298,11 @@ static void detect_bright_ring(yahboom_detection_context_t *context, camera_fb_t
     memset(column_y_offsets, 0, sizeof(column_y_offsets));
     ring_measurement_t best_raw_measurement = {0};
 
-    // 每个 X 只保留水管中线附近最符合亮芯暗环模板的位置。
-    for (int x = scan_left; x < scan_right; x++)
+    // 识别只取隔点样本；已锁定目标时只在上一位置附近搜索，减少 PSRAM 随机读取。
+    for (int x = scan_left; x < scan_right; x += DETECTION_RING_SCAN_STEP)
     {
         const int column_index = x - roi_left;
-        for (int y = scan_top; y <= scan_bottom; y++)
+        for (int y = scan_top; y <= scan_bottom; y += DETECTION_RING_SCAN_STEP)
         {
             const ring_measurement_t measurement = calculate_ring_measurement(frame, x, y);
             if (measurement.score > best_raw_measurement.score ||

@@ -248,3 +248,17 @@
 - 每个 X 仅保留水管中心带内的最强匹配，再合并连续列并沿用两次重捕获、30 像素跳变限幅和连续 3 次丢失保护。检测框和红色十字现在绘制在实际匹配到的 `(x,y)`；MSPM0 协议保持不变，`WIDTH` 初始发送暗环直径 `8`。
 - 新日志：`RING_REACQUIRED`、`RING`、`RING_FOUND`、`RING_LOST`。未命中时每 500 ms 输出 `RING_NO_MATCH center=<亮芯亮度> contrast=<亮暗对比> dark=<暗环点数>`，用于实机调参；若主要是 `contrast` 偏低先降低 `DETECTION_RING_MIN_SCORE`，若 `dark` 偏低先降低 `DETECTION_RING_MIN_DARK_SAMPLES` 或扩大暗环半径。
 - 已用 ESP-IDF Ninja 完整构建通过，生成 `build/Camera_Display.bin`，大小 `0x100d90`，最小应用分区剩余约 `73%`。未烧录、未完成现场识别和 MSPM0 联调验证。
+
+## 2026-08-07 图传 JPEG 质量降级
+
+- 用户反馈图传帧率过低，但本地钢珠识别需要保持原始帧。当前 `/stream` 实际使用 `main/src/yahboom_jpeg_stream.cpp` 的独立 JPEG 编码任务，识别先处理完整 `320x240 YUV422` 原始帧，再异步编码图传，因此只降低 `YAHBOOM_JPEG_QUALITY` 不会改变识别输入。
+- `YAHBOOM_JPEG_QUALITY` 已从 `40` 调整为 `20`，输出尺寸仍为 `320x240`；旧 `app_myhttpd.cpp` 的备用 `stream_handler` 路径未被当前 `/stream` 注册，不做无关修改。
+- ESP-IDF Ninja 完整构建通过，`build/Camera_Display.bin` 大小为 `0x100d90`，最小应用分区剩余约 `73%`；未烧录、未实测实际图传 FPS 和 JPEG 平均大小。实机应观察 `PERF_STREAM` 的 `jpeg_avg`、`encode_avg`、`send_avg` 与页面 FPS。
+
+## 2026-08-07 亮芯暗环识别扫描优化
+
+- 用户实机反馈：降低网页 JPEG 质量到 `20` 后图传仍严重卡顿，怀疑亮芯暗环识别的持续模板扫描拖慢相机任务。
+- 原亮芯暗环扫描为每 2 帧在约 `312 × 15 = 4680` 个中心点计算 5 点亮芯和 8 点暗环，YUV422 帧位于 PSRAM，密集随机读可能在 `-Og` 构建下占用明显时间。
+- 已保持每两帧检测、识别阈值和 MSP 输出频率不变，但将纵向搜索从中心线上下 `±7` 缩小到 `±5`，横纵均改为隔 2 像素采样；未锁定时每次约评估 `936` 个中心点，约减少 80%。
+- 已锁定目标时仅搜索上次 X 坐标左右 `48` 像素；单次约评估 `288` 个中心点，约比原全 ROI 扫描减少 94%。若连续丢失，自动回到全 ROI 扫描重捕获。
+- ESP-IDF Ninja 完整构建通过，`build/Camera_Display.bin` 大小为 `0x100db0`，最小应用分区剩余约 `73%`。未烧录，实机需要对比 `PERF_CAMERA detect_avg/max`、`capture_avg`、页面 FPS 与 `PERF_STREAM`。

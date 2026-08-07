@@ -31,6 +31,8 @@ static const char *TAG = "gc2145";
 
 #define H8(v) ((v)>>8)
 #define L8(v) ((v)&0xff)
+#define P0_AEC_ENABLE 0xb6
+#define GC2145_EXPOSURE_MAX 0x0fff
 
 //#define REG_DEBUG_ON
 
@@ -430,6 +432,35 @@ static int set_dummy(sensor_t *sensor, int val)
     ESP_LOGW(TAG, "Unsupported");
     return -1;
 }
+
+static int set_exposure_ctrl(sensor_t *sensor, int enable)
+{
+    int ret = write_reg(sensor->slv_addr, RESET_RELATED, 0x00);
+    ret |= set_reg_bits(sensor->slv_addr, P0_AEC_ENABLE, 0, 0x01, enable != 0);
+    if (ret == 0) {
+        sensor->status.aec = enable != 0;
+        ESP_LOGI(TAG, "AEC %s", enable ? "enabled" : "disabled");
+    }
+    return ret;
+}
+
+static int set_aec_value(sensor_t *sensor, int value)
+{
+    if (value < 1 || value > GC2145_EXPOSURE_MAX) {
+        ESP_LOGE(TAG, "Invalid manual exposure: %d", value);
+        return -1;
+    }
+
+    int ret = write_reg(sensor->slv_addr, RESET_RELATED, 0x00);
+    ret |= write_reg(sensor->slv_addr, P0_EXPOSURE_HIGH, H8(value));
+    ret |= write_reg(sensor->slv_addr, P0_EXPOSURE_LOW, L8(value));
+    if (ret == 0) {
+        sensor->status.aec_value = value;
+        ESP_LOGI(TAG, "Manual exposure set to 0x%03x", value);
+    }
+    return ret;
+}
+
 static int set_gainceiling_dummy(sensor_t *sensor, gainceiling_t val)
 {
     ESP_LOGW(TAG, "Unsupported");
@@ -468,14 +499,14 @@ int gc2145_init(sensor_t *sensor)
     sensor->set_colorbar = set_colorbar;
     sensor->set_whitebal = set_dummy;
     sensor->set_gain_ctrl = set_dummy;
-    sensor->set_exposure_ctrl = set_dummy;
+    sensor->set_exposure_ctrl = set_exposure_ctrl;
     sensor->set_hmirror = set_hmirror;
     sensor->set_vflip = set_vflip;
 
     sensor->set_aec2 = set_dummy;
     sensor->set_awb_gain = set_dummy;
     sensor->set_agc_gain = set_dummy;
-    sensor->set_aec_value = set_dummy;
+    sensor->set_aec_value = set_aec_value;
 
     sensor->set_special_effect = set_dummy;
     sensor->set_wb_mode = set_dummy;

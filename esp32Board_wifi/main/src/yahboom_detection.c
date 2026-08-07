@@ -103,7 +103,6 @@ static void draw_detection_marker(camera_fb_t *frame, int center_x, int center_y
         draw_yuv422_pixel(frame, left, y, &kDetectionBoxColor);
         draw_yuv422_pixel(frame, right, y, &kDetectionBoxColor);
     }
-
 }
 
 static void draw_detection_overlays(camera_fb_t *frame,

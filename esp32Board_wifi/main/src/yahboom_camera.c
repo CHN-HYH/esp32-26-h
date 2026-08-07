@@ -10,6 +10,8 @@ static const char *TAG = "yahboom_camera";
 static QueueHandle_t xQueueFrameO = NULL;
 static yahboom_detection_context_t detection_context;
 
+#define GC2145_MANUAL_EXPOSURE 0x04e2
+
 static void task_process_handler(void *arg)
 {
     (void)arg;
@@ -127,6 +129,8 @@ void my_register_camera(const pixformat_t pixel_format,
         // GC2145 当前只关闭自动白平衡，其他寄存器保持驱动默认值。
         sensor->set_reg(sensor, 0xfe, 0xFF, 0);
         sensor->set_reg(sensor, 0x42, 0xFF, 0xfd);
+        sensor->set_exposure_ctrl(sensor, 0);
+        sensor->set_aec_value(sensor, GC2145_MANUAL_EXPOSURE);
     }
 
     yahboom_detection_init(&detection_context);

@@ -51,8 +51,14 @@ typedef struct
 } jpg_chunking_t;
 
 #define PART_BOUNDARY "123456789000000000000987654321"
-#define STREAM_JPEG_QUALITY 40
+#define STREAM_JPEG_QUALITY 60
+#define STREAM_JPEG_CONGESTED_QUALITY 40
+#define STREAM_JPEG_CONGESTION_US 100000
+#define STREAM_JPEG_QUALITY_RECOVERY_FRAMES 12
 #define STREAM_JPEG_BUFFER_SIZE (128 * 1024)
+#define STREAM_PREVIEW_WIDTH 160
+#define STREAM_PREVIEW_HEIGHT 120
+#define STREAM_PREVIEW_BUFFER_SIZE (STREAM_PREVIEW_WIDTH * STREAM_PREVIEW_HEIGHT * 2)
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
 static const char *_STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
 static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\nX-Timestamp: %lld.%06lld\r\n\r\n";
@@ -65,13 +71,16 @@ typedef struct
 {
     jpeg_enc_handle_t handle;
     uint8_t *output;
+    uint8_t *preview;
+    uint8_t quality;
+    uint8_t stable_frames;
 } stream_jpeg_encoder_t;
 
 static bool stream_jpeg_encoder_init(stream_jpeg_encoder_t *encoder)
 {
     jpeg_enc_config_t config = DEFAULT_JPEG_ENC_CONFIG();
-    config.width = 320;
-    config.height = 240;
+    config.width = STREAM_PREVIEW_WIDTH;
+    config.height = STREAM_PREVIEW_HEIGHT;
     config.src_type = JPEG_PIXEL_FORMAT_YCbYCr;
     config.subsampling = JPEG_SUBSAMPLE_420;
     config.quality = STREAM_JPEG_QUALITY;
@@ -79,11 +88,19 @@ static bool stream_jpeg_encoder_init(stream_jpeg_encoder_t *encoder)
     config.task_enable = false;
 
     encoder->handle = NULL;
+    encoder->quality = STREAM_JPEG_QUALITY;
+    encoder->stable_frames = 0;
+    encoder->preview = static_cast<uint8_t *>(heap_caps_aligned_alloc(
+        16, STREAM_PREVIEW_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     encoder->output = static_cast<uint8_t *>(
         heap_caps_malloc(STREAM_JPEG_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (!encoder->output)
+    if (!encoder->preview || !encoder->output)
     {
-        ESP_LOGE(TAG, "Fast JPEG output buffer allocation failed");
+        ESP_LOGE(TAG, "Fast JPEG preview buffer allocation failed");
+        heap_caps_free(encoder->preview);
+        heap_caps_free(encoder->output);
+        encoder->preview = NULL;
+        encoder->output = NULL;
         return false;
     }
 
@@ -91,12 +108,15 @@ static bool stream_jpeg_encoder_init(stream_jpeg_encoder_t *encoder)
     if (ret != JPEG_ERR_OK)
     {
         ESP_LOGE(TAG, "Fast JPEG encoder initialization failed: %d", ret);
-        free(encoder->output);
+        heap_caps_free(encoder->preview);
+        heap_caps_free(encoder->output);
+        encoder->preview = NULL;
         encoder->output = NULL;
         return false;
     }
 
-    ESP_LOGI(TAG, "Fast JPEG encoder ready: 320x240 YUV422, quality %d", STREAM_JPEG_QUALITY);
+    ESP_LOGI(TAG, "Fast JPEG encoder ready: %dx%d color preview, quality %d",
+             STREAM_PREVIEW_WIDTH, STREAM_PREVIEW_HEIGHT, STREAM_JPEG_QUALITY);
     return true;
 }
 
@@ -107,22 +127,60 @@ static void stream_jpeg_encoder_deinit(stream_jpeg_encoder_t *encoder)
         jpeg_enc_close(encoder->handle);
         encoder->handle = NULL;
     }
-    free(encoder->output);
+    heap_caps_free(encoder->preview);
+    heap_caps_free(encoder->output);
+    encoder->preview = NULL;
     encoder->output = NULL;
+}
+
+// 本地识别保留 QVGA；网页预览保留亮度边缘，色度仍按 2x2 平均。
+static bool stream_downsample_yuv422(const camera_fb_t *frame, uint8_t *preview)
+{
+    if (!frame || !preview || frame->format != PIXFORMAT_YUV422 ||
+        frame->width != 320 || frame->height != 240 ||
+        frame->len < (size_t)frame->width * frame->height * 2)
+    {
+        return false;
+    }
+
+    const size_t source_stride = frame->width * 2;
+    const size_t preview_stride = STREAM_PREVIEW_WIDTH * 2;
+    for (size_t y = 0; y < STREAM_PREVIEW_HEIGHT; ++y)
+    {
+        const uint8_t *top = frame->buf + (y * 2) * source_stride;
+        const uint8_t *bottom = top + source_stride;
+        uint8_t *destination = preview + y * preview_stride;
+
+        for (size_t pair = 0; pair < STREAM_PREVIEW_WIDTH / 2; ++pair)
+        {
+            const uint8_t *top_pair = top + pair * 8;
+            const uint8_t *bottom_pair = bottom + pair * 8;
+            uint8_t *output_pair = destination + pair * 4;
+
+            output_pair[0] = top_pair[0];
+            output_pair[1] = (uint8_t)((top_pair[1] + top_pair[5] +
+                                        bottom_pair[1] + bottom_pair[5]) / 4);
+            output_pair[2] = top_pair[4];
+            output_pair[3] = (uint8_t)((top_pair[3] + top_pair[7] +
+                                        bottom_pair[3] + bottom_pair[7]) / 4);
+        }
+    }
+
+    return true;
 }
 
 static bool stream_jpeg_encode(stream_jpeg_encoder_t *encoder, const camera_fb_t *frame,
                                uint8_t **jpg_buf, size_t *jpg_len)
 {
-    if (!encoder->handle || !encoder->output || frame->format != PIXFORMAT_YUV422 ||
-        frame->width != 320 || frame->height != 240 ||
-        (reinterpret_cast<uintptr_t>(frame->buf) & 0x0f) != 0)
+    if (!encoder->handle || !encoder->output || !encoder->preview ||
+        !stream_downsample_yuv422(frame, encoder->preview))
     {
         return false;
     }
 
     int encoded_size = 0;
-    jpeg_error_t ret = jpeg_enc_process(encoder->handle, frame->buf, frame->len,
+    jpeg_error_t ret = jpeg_enc_process(encoder->handle, encoder->preview,
+                                        STREAM_PREVIEW_BUFFER_SIZE,
                                         encoder->output, STREAM_JPEG_BUFFER_SIZE,
                                         &encoded_size);
     if (ret != JPEG_ERR_OK || encoded_size <= 0)
@@ -134,6 +192,37 @@ static bool stream_jpeg_encode(stream_jpeg_encoder_t *encoder, const camera_fb_t
     *jpg_buf = encoder->output;
     *jpg_len = static_cast<size_t>(encoded_size);
     return true;
+}
+
+static void stream_jpeg_adjust_quality(stream_jpeg_encoder_t *encoder, uint32_t send_us)
+{
+    uint8_t next_quality = encoder->quality;
+    if (send_us > STREAM_JPEG_CONGESTION_US)
+    {
+        encoder->stable_frames = 0;
+        if (next_quality > STREAM_JPEG_CONGESTED_QUALITY)
+            next_quality = STREAM_JPEG_CONGESTED_QUALITY;
+    }
+    else if (next_quality < STREAM_JPEG_QUALITY)
+    {
+        encoder->stable_frames++;
+        if (encoder->stable_frames >= STREAM_JPEG_QUALITY_RECOVERY_FRAMES)
+        {
+            next_quality += 5;
+            if (next_quality > STREAM_JPEG_QUALITY)
+                next_quality = STREAM_JPEG_QUALITY;
+            encoder->stable_frames = 0;
+        }
+    }
+
+    if (next_quality == encoder->quality)
+        return;
+
+    if (jpeg_enc_set_quality(encoder->handle, next_quality) == JPEG_ERR_OK)
+    {
+        encoder->quality = next_quality;
+        ESP_LOGI(TAG, "Preview JPEG quality adjusted to %u", (unsigned)next_quality);
+    }
 }
 
 static size_t jpg_encode_stream(void *arg, size_t index, const void *data, size_t len)
@@ -291,6 +380,8 @@ static esp_err_t stream_handler(httpd_req_t *req)
                 static_cast<uint32_t>(esp_timer_get_time() - send_start_us);
             yahboom_performance_record_stream(queue_wait_us, encode_us, send_us,
                                                encoded_jpeg_size, fallback_encoder_used);
+            if (fast_encoder_ready)
+                stream_jpeg_adjust_quality(&encoder, send_us);
         }
         else
         {

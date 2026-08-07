@@ -51,7 +51,7 @@ typedef struct
 } jpg_chunking_t;
 
 #define PART_BOUNDARY "123456789000000000000987654321"
-#define STREAM_JPEG_QUALITY 60
+#define STREAM_JPEG_QUALITY 40
 #define STREAM_JPEG_BUFFER_SIZE (128 * 1024)
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
 static const char *_STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";

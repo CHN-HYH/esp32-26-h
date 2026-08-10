@@ -244,3 +244,9 @@
 - 当前实际红色识别框为 `DETECTION_MARKER_HALF_SIZE_PIXELS=6`、`DETECTION_MARKER_THICKNESS_PIXELS=2`，即约 `13x13` 原始像素的 `2 px` 内缩边框；此配置覆盖上节的 `25x25 / 3 px` 记录。
 - ROI 区域框新增 `DETECTION_ROI_BORDER_THICKNESS_PIXELS=2`，蓝色边框在原 ROI 内向内绘制两层，不改变 `x=0, y=107, width=320, height=26` 的识别扫描范围。
 - 已使用 ESP-IDF v5.1.2 完整构建成功，`build/Camera_Display.bin` 大小为 `0x1009a0`，最小应用分区剩余约 `73%`；尚未烧录实机确认显示效果。
+
+## 2026-08-10 每帧识别试验（待用户验证）
+
+- `main/include/yahboom_detection.h` 已将 `DETECTION_EVERY_N_FRAMES` 从 `2` 改为 `1`，亮芯暗环检测现在对每一张进入检测任务的相机帧执行一次。
+- 此改动只缩短高速钢珠两次检测间的位移，未修改亮度阈值、ROI、候选筛选、跳变门限、重捕获、MSP UART 或图传逻辑。
+- 用户要求编译由其自行执行；本次未编译、烧录或实机验证。应重点对比相机 FPS、`RING_LOST` 次数、重捕获延迟和高速运动下的坐标连续性。

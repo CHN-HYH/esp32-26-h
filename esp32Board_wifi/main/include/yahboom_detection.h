@@ -32,6 +32,7 @@
 #define DETECTION_EVERY_N_FRAMES                     1  // 每隔多少相机帧执行一次识别。
 #define DETECTION_MARKER_HALF_SIZE_PIXELS            6  // 红色目标方框的半边长。
 #define DETECTION_MARKER_THICKNESS_PIXELS            2  // 红色目标方框的内缩线宽。
+#define DETECTION_HOLD_MISSED_FRAMES                 1  // 连续漏检后仍保留最后一次实测坐标的检测周期数。
 #define DETECTION_LOST_COUNT                         3  // 连续多少个检测周期未命中后清除轨迹。
 #define DETECTION_TRACK_MAX_JUMP_PIXELS             30  // 跟踪状态下相邻检测允许的最大 X 跳变。
 #define DETECTION_REACQUIRE_CONFIRM_COUNT            2  // 丢失后连续命中多少次才重新确认目标。

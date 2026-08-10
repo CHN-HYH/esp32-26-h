@@ -123,11 +123,17 @@ static void draw_detection_marker(camera_fb_t *frame, int center_x, int center_y
     }
 }
 
+static bool tracking_has_output(const yahboom_detection_tracking_t *tracking)
+{
+    return tracking->position_valid &&
+           tracking->missing_count <= DETECTION_HOLD_MISSED_FRAMES;
+}
+
 static void draw_detection_overlays(camera_fb_t *frame,
                                     const yahboom_detection_context_t *context)
 {
     draw_detection_roi(frame);
-    if (context->tracking.position_valid && context->tracking.missing_count == 0)
+    if (tracking_has_output(&context->tracking))
     {
         draw_detection_marker(frame, context->tracking.center_x,
                               context->tracking.center_y);
@@ -163,8 +169,7 @@ static void update_detection_state(yahboom_detection_context_t *context,
 static void send_msp_tracking_status(const yahboom_detection_context_t *context)
 {
     const yahboom_detection_tracking_t *tracking = &context->tracking;
-    const bool valid = !context->invalid_roi_reported && tracking->position_valid &&
-                       tracking->missing_count == 0;
+    const bool valid = !context->invalid_roi_reported && tracking_has_output(tracking);
     yahboom_msp_uart_send(valid, valid ? (uint16_t)tracking->center_x : 0,
                           valid ? tracking->width : 0);
 }

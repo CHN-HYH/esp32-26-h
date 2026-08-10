@@ -56,8 +56,8 @@ typedef struct
 #define STREAM_JPEG_CONGESTION_US 100000
 #define STREAM_JPEG_QUALITY_RECOVERY_FRAMES 12
 #define STREAM_JPEG_BUFFER_SIZE (128 * 1024)
-#define STREAM_PREVIEW_WIDTH 160
-#define STREAM_PREVIEW_HEIGHT 120
+#define STREAM_PREVIEW_WIDTH 320
+#define STREAM_PREVIEW_HEIGHT 240
 #define STREAM_PREVIEW_BUFFER_SIZE (STREAM_PREVIEW_WIDTH * STREAM_PREVIEW_HEIGHT * 2)
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
 static const char *_STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
@@ -133,7 +133,7 @@ static void stream_jpeg_encoder_deinit(stream_jpeg_encoder_t *encoder)
     encoder->output = NULL;
 }
 
-// 本地识别保留 QVGA；网页预览保留亮度边缘，色度仍按 2x2 平均。
+// 本地识别保留 QVGA；网页预览按比例最近邻缩放，优先保留亮度边缘。
 static bool stream_downsample_yuv422(const camera_fb_t *frame, uint8_t *preview)
 {
     if (!frame || !preview || frame->format != PIXFORMAT_YUV422 ||
@@ -147,22 +147,24 @@ static bool stream_downsample_yuv422(const camera_fb_t *frame, uint8_t *preview)
     const size_t preview_stride = STREAM_PREVIEW_WIDTH * 2;
     for (size_t y = 0; y < STREAM_PREVIEW_HEIGHT; ++y)
     {
-        const uint8_t *top = frame->buf + (y * 2) * source_stride;
-        const uint8_t *bottom = top + source_stride;
+        const size_t source_y = y * frame->height / STREAM_PREVIEW_HEIGHT;
+        const uint8_t *source_row = frame->buf + source_y * source_stride;
         uint8_t *destination = preview + y * preview_stride;
 
         for (size_t pair = 0; pair < STREAM_PREVIEW_WIDTH / 2; ++pair)
         {
-            const uint8_t *top_pair = top + pair * 8;
-            const uint8_t *bottom_pair = bottom + pair * 8;
+            const size_t output_x0 = pair * 2;
+            const size_t output_x1 = output_x0 + 1;
+            const size_t source_x0 = output_x0 * frame->width / STREAM_PREVIEW_WIDTH;
+            const size_t source_x1 = output_x1 * frame->width / STREAM_PREVIEW_WIDTH;
+            const uint8_t *source_pair0 = source_row + (source_x0 & ~1U) * 2;
+            const uint8_t *source_pair1 = source_row + (source_x1 & ~1U) * 2;
             uint8_t *output_pair = destination + pair * 4;
 
-            output_pair[0] = top_pair[0];
-            output_pair[1] = (uint8_t)((top_pair[1] + top_pair[5] +
-                                        bottom_pair[1] + bottom_pair[5]) / 4);
-            output_pair[2] = top_pair[4];
-            output_pair[3] = (uint8_t)((top_pair[3] + top_pair[7] +
-                                        bottom_pair[3] + bottom_pair[7]) / 4);
+            output_pair[0] = source_row[source_x0 * 2];
+            output_pair[1] = (uint8_t)((source_pair0[1] + source_pair1[1]) / 2);
+            output_pair[2] = source_row[source_x1 * 2];
+            output_pair[3] = (uint8_t)((source_pair0[3] + source_pair1[3]) / 2);
         }
     }
 

@@ -73,16 +73,26 @@ static void draw_detection_roi(camera_fb_t *frame)
     if (!get_detection_roi(frame, &left, &top, &right, &bottom))
         return;
 
-    for (int x = left; x < right; x++)
+    for (int layer = 0; layer < DETECTION_ROI_BORDER_THICKNESS_PIXELS; layer++)
     {
-        draw_yuv422_pixel(frame, x, top, &kDetectionRoiColor);
-        draw_yuv422_pixel(frame, x, bottom - 1, &kDetectionRoiColor);
-    }
+        const int layer_left = left + layer;
+        const int layer_right = right - 1 - layer;
+        const int layer_top = top + layer;
+        const int layer_bottom = bottom - 1 - layer;
 
-    for (int y = top; y < bottom; y++)
-    {
-        draw_yuv422_pixel(frame, left, y, &kDetectionRoiColor);
-        draw_yuv422_pixel(frame, right - 1, y, &kDetectionRoiColor);
+        if (layer_left > layer_right || layer_top > layer_bottom)
+            break;
+
+        for (int x = layer_left; x <= layer_right; x++)
+        {
+            draw_yuv422_pixel(frame, x, layer_top, &kDetectionRoiColor);
+            draw_yuv422_pixel(frame, x, layer_bottom, &kDetectionRoiColor);
+        }
+        for (int y = layer_top; y <= layer_bottom; y++)
+        {
+            draw_yuv422_pixel(frame, layer_left, y, &kDetectionRoiColor);
+            draw_yuv422_pixel(frame, layer_right, y, &kDetectionRoiColor);
+        }
     }
 }
 
@@ -93,15 +103,23 @@ static void draw_detection_marker(camera_fb_t *frame, int center_x, int center_y
     const int top = center_y - DETECTION_MARKER_HALF_SIZE_PIXELS;
     const int bottom = center_y + DETECTION_MARKER_HALF_SIZE_PIXELS;
 
-    for (int x = left; x <= right; x++)
+    for (int layer = 0; layer < DETECTION_MARKER_THICKNESS_PIXELS; layer++)
     {
-        draw_yuv422_pixel(frame, x, top, &kDetectionBoxColor);
-        draw_yuv422_pixel(frame, x, bottom, &kDetectionBoxColor);
-    }
-    for (int y = top; y <= bottom; y++)
-    {
-        draw_yuv422_pixel(frame, left, y, &kDetectionBoxColor);
-        draw_yuv422_pixel(frame, right, y, &kDetectionBoxColor);
+        const int layer_left = left + layer;
+        const int layer_right = right - layer;
+        const int layer_top = top + layer;
+        const int layer_bottom = bottom - layer;
+
+        for (int x = layer_left; x <= layer_right; x++)
+        {
+            draw_yuv422_pixel(frame, x, layer_top, &kDetectionBoxColor);
+            draw_yuv422_pixel(frame, x, layer_bottom, &kDetectionBoxColor);
+        }
+        for (int y = layer_top; y <= layer_bottom; y++)
+        {
+            draw_yuv422_pixel(frame, layer_left, y, &kDetectionBoxColor);
+            draw_yuv422_pixel(frame, layer_right, y, &kDetectionBoxColor);
+        }
     }
 }
 

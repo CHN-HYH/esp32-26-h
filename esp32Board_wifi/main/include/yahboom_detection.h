@@ -8,10 +8,11 @@
 
 // 固定水管识别区域。按实际水管在画面中的位置调整。
 #define DETECTION_ROI_X                              0
-#define DETECTION_ROI_Y                            107
+#define DETECTION_ROI_Y                            108
 #define DETECTION_ROI_WIDTH                        320
 #define DETECTION_ROI_HEIGHT                        26
 #define DETECTION_EDGE_MARGIN                        0
+#define DETECTION_ROI_BORDER_THICKNESS_PIXELS        2
 
 // 钢珠亮芯和暗环的几何参数，单位为像素。
 #define DETECTION_RING_CENTER_RADIUS                 1
@@ -30,6 +31,7 @@
 // 连续帧状态与图传标记参数。
 #define DETECTION_EVERY_N_FRAMES                     2
 #define DETECTION_MARKER_HALF_SIZE_PIXELS            6
+#define DETECTION_MARKER_THICKNESS_PIXELS            2
 #define DETECTION_LOST_COUNT                         3
 #define DETECTION_TRACK_MAX_JUMP_PIXELS             30
 #define DETECTION_REACQUIRE_CONFIRM_COUNT            2

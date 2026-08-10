@@ -11,6 +11,7 @@
 
 - 默认使用中文交流，新增代码注释和项目文档使用中文。
 - 修改网页后必须同步重新生成对应的 `.html.gz`，再编译和烧录固件。
+- 代码修改后的编译由用户执行；除非用户明确要求，Codex 不主动编译、烧录或进行实机验证。
 - 未经明确要求不提交、推送或发布代码。
 - 临时产物统一放入 `codex-work/`，任务结束前清理无用文件。
 
@@ -225,3 +226,21 @@
 - 已回退“放大加粗红框”改动，恢复 `DETECTION_MARKER_HALF_SIZE_PIXELS=6`，即约 `13x13` 原始像素、单像素红色边框。
 - 中心十字保持删除；亮芯+暗环识别算法、MSP UART、图传和曝光相关代码未回退。
 - 这是当前方框显示基线，后续如果继续调框大小或线宽，以此版本对比。
+
+## 2026-08-10 会话恢复核对
+
+- 仓库工作区干净，当前分支 `main` 与 `origin/main` 均指向提交 `20b0938`（降低图传分辨率和质量，提高流畅度，高质量预览自适应）。
+- 当前实际识别 ROI 以源码为准：`DETECTION_ROI_X=0`、`DETECTION_ROI_Y=107`、`DETECTION_ROI_WIDTH=320`、`DETECTION_ROI_HEIGHT=26`；红色方框基线仍为 `DETECTION_MARKER_HALF_SIZE_PIXELS=6`。
+- 当前实际预览配置为 `160x120` 彩色 JPEG，默认 `STREAM_JPEG_QUALITY=60`，发送拥塞时自适应降至 `40`，稳定后逐步恢复；本地识别仍使用 `320x240 YUV422` 原始帧。
+
+## 2026-08-10 恢复红色方框清晰度方案
+
+- 已恢复放大加粗红色识别框：`DETECTION_MARKER_HALF_SIZE_PIXELS=12`、`DETECTION_MARKER_THICKNESS_PIXELS=3`。图传在检测坐标周围绘制约 `25x25` 原始像素的三层红色矩形边缘，不绘制中心十字。
+- 仅修改 `main/include/yahboom_detection.h` 和 `main/src/yahboom_detection.c` 的显示参数与叠加绘制逻辑；亮芯暗环识别、MSP UART、相机采集、手动曝光和图传参数均未改变。
+- 已使用 ESP-IDF v5.1.2 完整构建成功，`build/Camera_Display.bin` 大小为 `0x100960`，最小应用分区剩余约 `73%`；尚未烧录实机确认网页上的显示效果。
+
+## 2026-08-10 识别与 ROI 方框当前显示配置
+
+- 当前实际红色识别框为 `DETECTION_MARKER_HALF_SIZE_PIXELS=6`、`DETECTION_MARKER_THICKNESS_PIXELS=2`，即约 `13x13` 原始像素的 `2 px` 内缩边框；此配置覆盖上节的 `25x25 / 3 px` 记录。
+- ROI 区域框新增 `DETECTION_ROI_BORDER_THICKNESS_PIXELS=2`，蓝色边框在原 ROI 内向内绘制两层，不改变 `x=0, y=107, width=320, height=26` 的识别扫描范围。
+- 已使用 ESP-IDF v5.1.2 完整构建成功，`build/Camera_Display.bin` 大小为 `0x1009a0`，最小应用分区剩余约 `73%`；尚未烧录实机确认显示效果。

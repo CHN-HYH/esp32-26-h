@@ -11,6 +11,29 @@ static const char *TAG = "yahboom_camera";
 static const yahboom_yuv422_color_t kDetectionBoxColor = {76, 85, 255};
 static const yahboom_yuv422_color_t kDetectionRoiColor = {150, 255, 100};
 
+// 这两个值由网页端动态调整，识别任务只读取，不保存到 Flash。
+volatile int DETECTION_ROI_Y = DETECTION_ROI_Y_DEFAULT;
+volatile int DETECTION_ROI_HEIGHT = DETECTION_ROI_HEIGHT_DEFAULT;
+
+bool yahboom_detection_set_roi_y(int value)
+{
+    if (value < 0 || value + DETECTION_ROI_HEIGHT > 240)
+        return false;
+
+    DETECTION_ROI_Y = value;
+    return true;
+}
+
+bool yahboom_detection_set_roi_height(int value)
+{
+    if (value < DETECTION_RING_RADIUS * 2 + 1 ||
+        DETECTION_ROI_Y + value > 240)
+        return false;
+
+    DETECTION_ROI_HEIGHT = value;
+    return true;
+}
+
 typedef struct
 {
     bool valid;
@@ -52,9 +75,11 @@ static bool get_detection_roi(const camera_fb_t *frame, int *left, int *top,
         return false;
 
     *left = DETECTION_ROI_X < minimum_x ? minimum_x : DETECTION_ROI_X;
-    *top = DETECTION_ROI_Y < minimum_y ? minimum_y : DETECTION_ROI_Y;
+    const int roi_y = DETECTION_ROI_Y;
+    const int roi_height = DETECTION_ROI_HEIGHT;
+    *top = roi_y < minimum_y ? minimum_y : roi_y;
     *right = DETECTION_ROI_X + DETECTION_ROI_WIDTH;
-    *bottom = DETECTION_ROI_Y + DETECTION_ROI_HEIGHT;
+    *bottom = roi_y + roi_height;
 
     if (*right > maximum_x)
         *right = maximum_x;

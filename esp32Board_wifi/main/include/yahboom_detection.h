@@ -6,13 +6,25 @@
 #include "esp_camera.h"
 #include "freertos/FreeRTOS.h"
 
-// 固定水管识别区域。按实际水管在画面中的位置调整。
+// 水管识别区域的默认配置。网页端可以在运行时调整 Y 起点和高度。
 #define DETECTION_ROI_X                              0  // ROI 左上角 X 坐标。
-#define DETECTION_ROI_Y                            106  // ROI 左上角 Y 坐标。
+#define DETECTION_ROI_Y_DEFAULT                     70  // ROI 左上角 Y 坐标默认值。
 #define DETECTION_ROI_WIDTH                        320  // ROI 宽度。
-#define DETECTION_ROI_HEIGHT                        28  // ROI 高度。
+#define DETECTION_ROI_HEIGHT_DEFAULT                25  // ROI 高度默认值。
 #define DETECTION_EDGE_MARGIN                        0  // 距离图像边缘的安全留白。
 #define DETECTION_ROI_BORDER_THICKNESS_PIXELS        2  // 图传中 ROI 蓝色边框的内缩线宽。
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// 运行时 ROI 参数。网页通过 /control 接口修改，重启后恢复默认值。
+extern volatile int DETECTION_ROI_Y;
+extern volatile int DETECTION_ROI_HEIGHT;
+
+// 设置 ROI 参数；Y、高度还必须满足 Y + 高度 <= 240。
+bool yahboom_detection_set_roi_y(int value);
+bool yahboom_detection_set_roi_height(int value);
 
 // 钢珠亮芯和暗环的几何参数，单位为像素。
 #define DETECTION_RING_CENTER_RADIUS                 1  // 亮芯均值采样的上下左右偏移。
@@ -68,10 +80,6 @@ typedef struct
     TickType_t last_detection_log_tick;      // 上一次坐标或未命中日志的系统节拍。
     yahboom_detection_tracking_t tracking;   // 目标跟踪与重捕获状态。
 } yahboom_detection_context_t;
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 // 初始化亮芯暗环识别状态。
 void yahboom_detection_init(yahboom_detection_context_t *context);

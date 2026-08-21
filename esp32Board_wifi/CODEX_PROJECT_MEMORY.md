@@ -230,7 +230,7 @@
 ## 2026-08-10 会话恢复核对
 
 - 仓库工作区干净，当前分支 `main` 与 `origin/main` 均指向提交 `20b0938`（降低图传分辨率和质量，提高流畅度，高质量预览自适应）。
-- 当前实际识别 ROI 以源码为准：`DETECTION_ROI_X=0`、`DETECTION_ROI_Y=107`、`DETECTION_ROI_WIDTH=320`、`DETECTION_ROI_HEIGHT=26`；红色方框基线仍为 `DETECTION_MARKER_HALF_SIZE_PIXELS=6`。
+- 当时记录的 ROI 是 `DETECTION_ROI_X=0`、`DETECTION_ROI_Y=107`、`DETECTION_ROI_WIDTH=320`、`DETECTION_ROI_HEIGHT=26`；该固定值已被后续动态 ROI 参数替代，红色方框基线仍为 `DETECTION_MARKER_HALF_SIZE_PIXELS=6`。
 - 当前实际预览配置为 `160x120` 彩色 JPEG，默认 `STREAM_JPEG_QUALITY=60`，发送拥塞时自适应降至 `40`，稳定后逐步恢复；本地识别仍使用 `320x240 YUV422` 原始帧。
 
 ## 2026-08-10 恢复红色方框清晰度方案
@@ -274,3 +274,10 @@
 - 用户确认图传仍有余量，网页预览继续从 `240x180` 提升到原生 `320x240`。按比例采样在同尺寸下逐像素对应相机原始 YUV422，不再降低几何分辨率。
 - JPEG 默认 Q60、拥塞时 Q40 的自适应策略未改变；预览缓冲由宏自动调整为 `153600` 字节。原始识别、ROI 和 MSP 输出逻辑不变。
 - 用户负责编译、烧录和实测；重点观察图传是否仍稳定在目标 FPS、是否频繁降至 Q40，以及网页画面是否足够清晰。若图传明显卡顿，应优先回退到 `240x180`，而不是降低本地识别分辨率。
+
+## 2026-08-21 网页动态调整识别 ROI（待用户验证）
+
+- `main/include/yahboom_detection.h` 将 ROI 的 Y 起点和高度改为运行时参数 `DETECTION_ROI_Y`、`DETECTION_ROI_HEIGHT`，默认值保持当前源码的 `70` 和 `25`；X 和宽度仍为固定 `0`、`320`。
+- `main/src/app_myhttpd.cpp` 新增 `/control?var=DETECTION_ROI_Y|DETECTION_ROI_HEIGHT&val=...` 控制分支，并在 `/status` 返回两个当前值。有效范围为 Y `0~239`、高度 `9~240`，且必须满足 `Y + 高度 <= 240`；参数只保存在 RAM，重启后恢复默认值。
+- `../components/modules/web/www/index_gc2145.html` 新增 `ROI Y`、`ROI Height` 两个滑块；已同步重新生成 `index_gc2145.html.gz`。网页滑块改变后立即影响识别和图传中的 ROI 框。
+- 本次只做静态 JavaScript 语法检查和 gzip 内容一致性检查，未执行 ESP-IDF 编译、烧录或实机验证；用户编译后应观察 ROI 边框位置、识别范围和 MSP 坐标是否随滑块变化。

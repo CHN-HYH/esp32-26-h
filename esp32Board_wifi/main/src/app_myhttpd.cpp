@@ -25,6 +25,7 @@
 #include "sdkconfig.h"
 
 #include "yahboom_camera.h"
+#include "yahboom_detection.h"
 #include "yahboom_performance.h"
 #include "esp_timer.h"
 
@@ -304,12 +305,23 @@ static esp_err_t stream_handler(httpd_req_t *req)
     char part_buf[128];
     stream_jpeg_encoder_t encoder = {};
     bool fast_encoder_ready = stream_jpeg_encoder_init(&encoder);
+    const int stream_sock = httpd_req_to_sockfd(req);
     const int tcp_nodelay = 1;
+    struct timeval send_timeout = {};
+    send_timeout.tv_sec = 0;
+    send_timeout.tv_usec = 800000;
 
-    if (setsockopt(httpd_req_to_sockfd(req), IPPROTO_TCP, TCP_NODELAY,
+    if (setsockopt(stream_sock, IPPROTO_TCP, TCP_NODELAY,
                    &tcp_nodelay, sizeof(tcp_nodelay)) < 0)
     {
         ESP_LOGW(TAG, "Failed to enable TCP_NODELAY for stream");
+    }
+
+    // 限制单次图传发送阻塞时间，避免旧连接长期占住图传任务。
+    if (setsockopt(stream_sock, SOL_SOCKET, SO_SNDTIMEO,
+                   &send_timeout, sizeof(send_timeout)) < 0)
+    {
+        ESP_LOGW(TAG, "Failed to set stream send timeout");
     }
 
     res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
@@ -382,6 +394,11 @@ static esp_err_t stream_handler(httpd_req_t *req)
                 static_cast<uint32_t>(esp_timer_get_time() - send_start_us);
             yahboom_performance_record_stream(queue_wait_us, encode_us, send_us,
                                                encoded_jpeg_size, fallback_encoder_used);
+            if (res != ESP_OK)
+            {
+                ESP_LOGW(TAG, "Stream send failed after %u ms, closing connection",
+                         (unsigned)(send_us / 1000));
+            }
             if (fast_encoder_ready)
                 stream_jpeg_adjust_quality(&encoder, send_us);
         }
@@ -550,6 +567,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             detection_enabled = val;
         }
     }
+    else if (!strcmp(variable, "DETECTION_ROI_Y"))
+        res = yahboom_detection_set_roi_y(val) ? 0 : -1;
+    else if (!strcmp(variable, "DETECTION_ROI_HEIGHT"))
+        res = yahboom_detection_set_roi_height(val) ? 0 : -1;
     else
     {
         res = -1;
@@ -648,6 +669,8 @@ static esp_err_t status_handler(httpd_req_t *req)
     p += sprintf(p, ",\"face_detect\":%u", detection_enabled);
     p += sprintf(p, ",\"face_enroll\":%u,", is_enrolling);
     p += sprintf(p, "\"face_recognize\":%u", recognition_enabled);
+    p += sprintf(p, ",\"DETECTION_ROI_Y\":%d", (int)DETECTION_ROI_Y);
+    p += sprintf(p, ",\"DETECTION_ROI_HEIGHT\":%d", (int)DETECTION_ROI_HEIGHT);
     *p++ = '}';
     *p++ = 0;
     httpd_resp_set_type(req, "application/json");

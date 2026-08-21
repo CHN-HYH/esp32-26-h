@@ -334,8 +334,17 @@
                 min-width: 160px
             }
             #stream {
+                position: absolute;
+                width: 1px;
+                height: 1px;
+                opacity: 0;
+                pointer-events: none;
+            }
+            #stream-display {
+                display: block;
                 width: min(90vw, 640px);
                 height: auto;
+                background: #000;
             }
             .close {
                 position: absolute;
@@ -609,6 +618,18 @@
                                 <label class="slider" for="face_recognize"></label>
                             </div>
                         </div>
+                        <div class="input-group" id="DETECTION_ROI_Y-group">
+                            <label for="DETECTION_ROI_Y">ROI Y</label>
+                            <div class="range-min">0</div>
+                            <input type="range" id="DETECTION_ROI_Y" min="0" max="239" value="70" class="default-action">
+                            <div class="range-max" id="DETECTION_ROI_Y-max">239</div>
+                        </div>
+                        <div class="input-group" id="DETECTION_ROI_HEIGHT-group">
+                            <label for="DETECTION_ROI_HEIGHT">ROI Height</label>
+                            <div class="range-min">9</div>
+                            <input type="range" id="DETECTION_ROI_HEIGHT" min="9" max="240" value="25" class="default-action">
+                            <div class="range-max" id="DETECTION_ROI_HEIGHT-max">240</div>
+                        </div>
                         <section id="buttons">
                             <button id="get-still">Get Still</button>
                             <button id="toggle-stream">Start Stream</button>
@@ -713,6 +734,7 @@
                     <div id="stream-container" class="image-container hidden">
                         <button id="toggle-record" class="button save" type="button">Record MP4</button>
                         <div class="close" id="close-stream">×</div>
+                        <canvas id="stream-display" width="320" height="240"></canvas>
                         <img id="stream" src="" crossorigin>
                     </div>
                 </figure>
@@ -1010,6 +1032,8 @@ document.addEventListener('DOMContentLoaded', function (event) {
             }
             updateRegValue(el, state['0x'+reg.toString(16)], false)
         })
+      if (typeof syncRoiLimits === 'function')
+        syncRoiLimits()
     })
 
   const view = document.getElementById('stream')
@@ -1019,6 +1043,8 @@ document.addEventListener('DOMContentLoaded', function (event) {
   const enrollButton = document.getElementById('face_enroll')
   const closeButton = document.getElementById('close-stream')
   const recordButton = document.getElementById('toggle-record')
+  const display = document.getElementById('stream-display')
+  const displayContext = display.getContext('2d')
   const ledGroup = document.getElementById('led-group')
   const recordFps = 20
   let mediaRecorder = null
@@ -1030,6 +1056,12 @@ document.addEventListener('DOMContentLoaded', function (event) {
   let recordFrameTimer = null
   let recordTimeTimer = null
   let recordStartedAt = 0
+  let streamReconnectTimer = null
+  let streamManuallyStopped = true
+  let streamLastFrameAt = 0
+  let streamWatchdogTimer = null
+  let streamReconnectInProgress = false
+  let streamPreviewTimer = null
 
   const formatRecordTime = seconds => {
     const minutes = Math.floor(seconds / 60)
@@ -1123,6 +1155,46 @@ document.addEventListener('DOMContentLoaded', function (event) {
     }
   }
 
+  // 保存当前视频帧，重连期间继续显示上一帧。
+  const updatePreviewFrame = () => {
+    if (view.naturalWidth <= 0 || view.naturalHeight <= 0)
+      return
+
+    if (display.width !== view.naturalWidth || display.height !== view.naturalHeight) {
+      display.width = view.naturalWidth
+      display.height = view.naturalHeight
+    }
+
+    try {
+      displayContext.drawImage(view, 0, 0, display.width, display.height)
+    } catch (error) {
+      // 网络切换期间可能暂时无法读取图片，保留画布中的上一帧。
+    }
+  }
+
+  // 图传出错或长时间没有新画面时，自动关闭旧连接并重新连接。
+  const scheduleStreamReconnect = () => {
+    if (streamManuallyStopped || streamReconnectTimer !== null || streamReconnectInProgress)
+      return
+
+    streamReconnectTimer = setTimeout(() => {
+      streamReconnectTimer = null
+      if (streamManuallyStopped)
+        return
+
+      streamReconnectInProgress = true
+      updatePreviewFrame()
+      view.src = ''
+      streamLastFrameAt = Date.now()
+      streamReconnectTimer = setTimeout(() => {
+        streamReconnectTimer = null
+        streamReconnectInProgress = false
+        if (!streamManuallyStopped)
+          view.src = `${streamUrl}/stream?_cb=${Date.now()}`
+      }, 100)
+    }, 500)
+  }
+
   const startRecording = async () => {
     if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) {
       alert('当前浏览器不支持视频录制，请使用支持 MP4 录制的最新版浏览器。')
@@ -1180,7 +1252,7 @@ document.addEventListener('DOMContentLoaded', function (event) {
 
       const drawFrame = () => {
         try {
-          recordContext.drawImage(view, 0, 0, recordCanvas.width, recordCanvas.height)
+          recordContext.drawImage(display, 0, 0, recordCanvas.width, recordCanvas.height)
         } catch (error) {
           console.error('写入录制画面失败', error)
         }
@@ -1210,16 +1282,52 @@ document.addEventListener('DOMContentLoaded', function (event) {
   }
 
   const stopStream = () => {
+    streamManuallyStopped = true
+    if (streamReconnectTimer !== null) {
+      clearTimeout(streamReconnectTimer)
+      streamReconnectTimer = null
+    }
+    streamReconnectInProgress = false
     stopRecording()
     window.stop();
+    view.src = ''
+    if (streamWatchdogTimer !== null) {
+      clearInterval(streamWatchdogTimer)
+      streamWatchdogTimer = null
+    }
+    if (streamPreviewTimer !== null) {
+      clearInterval(streamPreviewTimer)
+      streamPreviewTimer = null
+    }
     streamButton.innerHTML = 'Start Stream'
   }
 
   const startStream = () => {
-    view.src = `${streamUrl}/stream`
+    streamManuallyStopped = false
+    streamLastFrameAt = Date.now()
+    view.src = `${streamUrl}/stream?_cb=${Date.now()}`
     show(viewContainer)
     streamButton.innerHTML = 'Stop Stream'
+    if (streamPreviewTimer === null)
+      streamPreviewTimer = setInterval(updatePreviewFrame, 50)
+    if (streamWatchdogTimer === null) {
+      streamWatchdogTimer = setInterval(() => {
+        if (!streamManuallyStopped && Date.now() - streamLastFrameAt > 6000)
+          scheduleStreamReconnect()
+      }, 1000)
+    }
   }
+
+  view.onload = () => {
+    streamLastFrameAt = Date.now()
+    updatePreviewFrame()
+  }
+
+  view.onerror = () => {
+    scheduleStreamReconnect()
+  }
+
+  view.onabort = view.onerror
 
   // Attach actions to buttons
   stillButton.onclick = () => {
@@ -1297,6 +1405,38 @@ document.addEventListener('DOMContentLoaded', function (event) {
   const detect = document.getElementById('face_detect')
   const recognize = document.getElementById('face_recognize')
   const framesize = document.getElementById('framesize')
+  const roiY = document.getElementById('DETECTION_ROI_Y')
+  const roiHeight = document.getElementById('DETECTION_ROI_HEIGHT')
+  const roiYMax = document.getElementById('DETECTION_ROI_Y-max')
+  const roiHeightMax = document.getElementById('DETECTION_ROI_HEIGHT-max')
+
+  // 两个滑块联动，保证 ROI 始终位于 320x240 画面内。
+  const syncRoiLimits = () => {
+    const y = parseInt(roiY.value, 10) || 0
+    const height = parseInt(roiHeight.value, 10) || 9
+    const maxY = Math.max(0, 240 - height)
+    const maxHeight = Math.max(9, 240 - y)
+    roiY.max = maxY
+    roiHeight.max = maxHeight
+    roiYMax.textContent = maxY
+    roiHeightMax.textContent = maxHeight
+    if (y > maxY)
+      roiY.value = maxY
+    if (height > maxHeight)
+      roiHeight.value = maxHeight
+  }
+
+  roiY.oninput = syncRoiLimits
+  roiHeight.oninput = syncRoiLimits
+  roiY.onchange = () => {
+    syncRoiLimits()
+    updateConfig(roiY)
+  }
+  roiHeight.onchange = () => {
+    syncRoiLimits()
+    updateConfig(roiHeight)
+  }
+  syncRoiLimits()
 
   framesize.onchange = () => {
     updateConfig(framesize)

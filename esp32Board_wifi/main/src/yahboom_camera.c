@@ -10,7 +10,7 @@ static const char *TAG = "yahboom_camera";
 static QueueHandle_t xQueueFrameO = NULL;
 static yahboom_detection_context_t detection_context;
 
-#define GC2145_MANUAL_EXPOSURE 0x04e2
+#define GC2145_MANUAL_EXPOSURE 0x0400
 
 static void task_process_handler(void *arg)
 {

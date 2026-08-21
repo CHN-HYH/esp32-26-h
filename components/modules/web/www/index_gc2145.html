@@ -135,6 +135,40 @@
                 padding: 0 5px
             }
 
+            .step-input-group {
+                align-items: center
+            }
+
+            .step-input-group>label {
+                min-width: 44%
+            }
+
+            .step-input-group input[type=range] {
+                min-width: 0
+            }
+
+            button.range-step {
+                flex: 0 0 24px;
+                width: 24px;
+                height: 24px;
+                margin: 0 2px;
+                padding: 0;
+                line-height: 24px;
+                border-radius: 3px;
+                font-size: 18px;
+                font-weight: bold
+            }
+
+            button.range-step:disabled {
+                cursor: default;
+                background: #707070
+            }
+
+            .range-value {
+                flex: 0 0 38px;
+                text-align: right
+            }
+
             button, .button {
                 display: block;
                 margin: 5px;
@@ -517,11 +551,12 @@
                             <input type="range" id="ae_level" min="-2" max="2" value="0" class="default-action">
                             <div class="range-max">2</div>
                         </div>
-                        <div class="input-group" id="aec_value-group">
+                        <div class="input-group step-input-group" id="aec_value-group">
                             <label for="aec_value">Exposure</label>
-                            <div class="range-min">0</div>
-                            <input type="range" id="aec_value" min="0" max="1200" value="204" class="default-action">
-                            <div class="range-max">1200</div>
+                            <button class="range-step" type="button" data-target="aec_value" data-direction="-1" title="减小曝光" aria-label="减小曝光">-</button>
+                            <input type="range" id="aec_value" min="1" max="4095" step="1" value="1024" class="default-action">
+                            <button class="range-step" type="button" data-target="aec_value" data-direction="1" title="增大曝光" aria-label="增大曝光">+</button>
+                            <output class="range-value" id="aec_value-current" for="aec_value">1024</output>
                         </div>
                         <div class="input-group" id="agc-group">
                             <label for="agc">AGC</label>
@@ -541,27 +576,6 @@
                             <div class="range-min">2x</div>
                             <input type="range" id="gainceiling" min="0" max="6" value="0" class="default-action">
                             <div class="range-max">128x</div>
-                        </div>
-                        <div class="input-group" id="bpc-group">
-                            <label for="bpc">BPC</label>
-                            <div class="switch">
-                                <input id="bpc" type="checkbox" class="default-action">
-                                <label class="slider" for="bpc"></label>
-                            </div>
-                        </div>
-                        <div class="input-group" id="wpc-group">
-                            <label for="wpc">WPC</label>
-                            <div class="switch">
-                                <input id="wpc" type="checkbox" class="default-action" checked="checked">
-                                <label class="slider" for="wpc"></label>
-                            </div>
-                        </div>
-                        <div class="input-group" id="raw_gma-group">
-                            <label for="raw_gma">Raw GMA</label>
-                            <div class="switch">
-                                <input id="raw_gma" type="checkbox" class="default-action" checked="checked">
-                                <label class="slider" for="raw_gma"></label>
-                            </div>
                         </div>
                         <div class="input-group" id="lenc-group">
                             <label for="lenc">Lens Correction</label>
@@ -591,49 +605,31 @@
                                 <label class="slider" for="dcw"></label>
                             </div>
                         </div>
-                        <div class="input-group" id="colorbar-group">
-                            <label for="colorbar">Color Bar</label>
-                            <div class="switch">
-                                <input id="colorbar" type="checkbox" class="default-action">
-                                <label class="slider" for="colorbar"></label>
-                            </div>
-                        </div>
                         <div class="input-group" id="led-group">
                           <label for="led_intensity">LED Intensity</label>
                           <div class="range-min">0</div>
                           <input type="range" id="led_intensity" min="0" max="255" value="0" class="default-action">
                           <div class="range-max">255</div>
                         </div>
-                        <div class="input-group" id="face_detect-group">
-                            <label for="face_detect">Face Detection</label>
-                            <div class="switch">
-                                <input id="face_detect" type="checkbox" class="default-action">
-                                <label class="slider" for="face_detect"></label>
-                            </div>
-                        </div>
-                        <div class="input-group" id="face_recognize-group">
-                            <label for="face_recognize">Face Recognition</label>
-                            <div class="switch">
-                                <input id="face_recognize" type="checkbox" class="default-action">
-                                <label class="slider" for="face_recognize"></label>
-                            </div>
-                        </div>
-                        <div class="input-group" id="DETECTION_ROI_Y-group">
+                        <div class="input-group step-input-group" id="DETECTION_ROI_Y-group">
                             <label for="DETECTION_ROI_Y">ROI Y</label>
                             <div class="range-min">0</div>
+                            <button class="range-step" type="button" data-target="DETECTION_ROI_Y" data-direction="-1" title="减小 ROI Y" aria-label="减小 ROI Y">-</button>
                             <input type="range" id="DETECTION_ROI_Y" min="0" max="239" value="70" class="default-action">
+                            <button class="range-step" type="button" data-target="DETECTION_ROI_Y" data-direction="1" title="增大 ROI Y" aria-label="增大 ROI Y">+</button>
                             <div class="range-max" id="DETECTION_ROI_Y-max">239</div>
                         </div>
-                        <div class="input-group" id="DETECTION_ROI_HEIGHT-group">
+                        <div class="input-group step-input-group" id="DETECTION_ROI_HEIGHT-group">
                             <label for="DETECTION_ROI_HEIGHT">ROI Height</label>
                             <div class="range-min">9</div>
+                            <button class="range-step" type="button" data-target="DETECTION_ROI_HEIGHT" data-direction="-1" title="减小 ROI Height" aria-label="减小 ROI Height">-</button>
                             <input type="range" id="DETECTION_ROI_HEIGHT" min="9" max="240" value="25" class="default-action">
+                            <button class="range-step" type="button" data-target="DETECTION_ROI_HEIGHT" data-direction="1" title="增大 ROI Height" aria-label="增大 ROI Height">+</button>
                             <div class="range-max" id="DETECTION_ROI_HEIGHT-max">240</div>
                         </div>
                         <section id="buttons">
                             <button id="get-still">Get Still</button>
                             <button id="toggle-stream">Start Stream</button>
-                            <button id="face_enroll" class="disabled" disabled="disabled">Enroll Face</button>
                         </section>
 
                         <div style="margin-top: 8px;"><center><span style="font-weight: bold;">Advanced Settings</span></center></div>
@@ -933,16 +929,6 @@ document.addEventListener('DOMContentLoaded', function (event) {
     el.classList.remove('hidden')
   }
 
-  const disable = el => {
-    el.classList.add('disabled')
-    el.disabled = true
-  }
-
-  const enable = el => {
-    el.classList.remove('disabled')
-    el.disabled = false
-  }
-
   const updateValue = (el, value, updateRemote) => {
     updateRemote = updateRemote == null ? true : updateRemote
     let initialValue
@@ -970,8 +956,6 @@ document.addEventListener('DOMContentLoaded', function (event) {
         }
       } else if(el.id === "awb_gain"){
         value ? show(wb) : hide(wb)
-      } else if(el.id === "face_recognize"){
-        value ? enable(enrollButton) : disable(enrollButton)
       } else if(el.id == "led_intensity"){
         value > -1 ? show(ledGroup) : hide(ledGroup)
       }
@@ -1034,13 +1018,14 @@ document.addEventListener('DOMContentLoaded', function (event) {
         })
       if (typeof syncRoiLimits === 'function')
         syncRoiLimits()
+      if (typeof syncExposureValue === 'function')
+        syncExposureValue()
     })
 
   const view = document.getElementById('stream')
   const viewContainer = document.getElementById('stream-container')
   const stillButton = document.getElementById('get-still')
   const streamButton = document.getElementById('toggle-stream')
-  const enrollButton = document.getElementById('face_enroll')
   const closeButton = document.getElementById('close-stream')
   const recordButton = document.getElementById('toggle-record')
   const display = document.getElementById('stream-display')
@@ -1350,10 +1335,6 @@ document.addEventListener('DOMContentLoaded', function (event) {
     }
   }
 
-  enrollButton.onclick = () => {
-    updateConfig(enrollButton)
-  }
-
   recordButton.onclick = () => {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       stopRecording()
@@ -1388,9 +1369,29 @@ document.addEventListener('DOMContentLoaded', function (event) {
   // Exposure
   const aec = document.getElementById('aec')
   const exposure = document.getElementById('aec_value-group')
+  const exposureInput = document.getElementById('aec_value')
+  const exposureValue = document.getElementById('aec_value-current')
+  const rangeStepButtons = document.querySelectorAll('.range-step')
+  const syncRangeStepButtons = () => {
+    rangeStepButtons.forEach(button => {
+      const input = document.getElementById(button.dataset.target)
+      const direction = parseInt(button.dataset.direction, 10)
+      const value = parseInt(input.value, 10)
+      button.disabled = direction < 0 ? value <= parseInt(input.min, 10) : value >= parseInt(input.max, 10)
+    })
+  }
+  const syncExposureValue = () => {
+    exposureValue.value = exposureInput.value
+    syncRangeStepButtons()
+  }
   aec.onchange = () => {
     updateConfig(aec)
     aec.checked ? hide(exposure) : show(exposure)
+  }
+  exposureInput.oninput = syncExposureValue
+  exposureInput.onchange = () => {
+    syncExposureValue()
+    updateConfig(exposureInput)
   }
 
   // AWB
@@ -1401,10 +1402,7 @@ document.addEventListener('DOMContentLoaded', function (event) {
     awb.checked ? show(wb) : hide(wb)
   }
 
-  // Detection and framesize
-  const detect = document.getElementById('face_detect')
-  const recognize = document.getElementById('face_recognize')
-  const framesize = document.getElementById('framesize')
+  // ROI 调节
   const roiY = document.getElementById('DETECTION_ROI_Y')
   const roiHeight = document.getElementById('DETECTION_ROI_HEIGHT')
   const roiYMax = document.getElementById('DETECTION_ROI_Y-max')
@@ -1424,6 +1422,7 @@ document.addEventListener('DOMContentLoaded', function (event) {
       roiY.value = maxY
     if (height > maxHeight)
       roiHeight.value = maxHeight
+    syncRangeStepButtons()
   }
 
   roiY.oninput = syncRoiLimits
@@ -1436,43 +1435,19 @@ document.addEventListener('DOMContentLoaded', function (event) {
     syncRoiLimits()
     updateConfig(roiHeight)
   }
+  rangeStepButtons.forEach(button => {
+    button.onclick = () => {
+      const input = document.getElementById(button.dataset.target)
+      if (parseInt(button.dataset.direction, 10) < 0)
+        input.stepDown()
+      else
+        input.stepUp()
+      input.dispatchEvent(new Event('input'))
+      input.dispatchEvent(new Event('change'))
+    }
+  })
+  syncExposureValue()
   syncRoiLimits()
-
-  framesize.onchange = () => {
-    updateConfig(framesize)
-    if (framesize.value > 5) {
-      updateValue(detect, false)
-      updateValue(recognize, false)
-    }
-  }
-
-  detect.onchange = () => {
-    if (framesize.value > 5) {
-      alert("Please select CIF or lower resolution before enabling this feature!");
-      updateValue(detect, false)
-      return;
-    }
-    updateConfig(detect)
-    if (!detect.checked) {
-      disable(enrollButton)
-      updateValue(recognize, false)
-    }
-  }
-
-  recognize.onchange = () => {
-    if (framesize.value > 5) {
-      alert("Please select CIF or lower resolution before enabling this feature!");
-      updateValue(recognize, false)
-      return;
-    }
-    updateConfig(recognize)
-    if (recognize.checked) {
-      enable(enrollButton)
-      updateValue(detect, true)
-    } else {
-      disable(enrollButton)
-    }
-  }
 })
 
         </script>
